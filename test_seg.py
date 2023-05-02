@@ -114,7 +114,8 @@ if __name__=='__main__':
     #data_dir = '/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/004_rawdata/train_data'
     data_dir = '/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/004_rawdata/valid_data'
     device = torch.device('cpu' if opt.gpu_ids == -1 else 'cuda')
-    patch_size = (128,160)
+    #patch_size = (128,160)
+    patch_size = (160,192)
     model = UnetModel(opt, device=device)
     model.eval()
 

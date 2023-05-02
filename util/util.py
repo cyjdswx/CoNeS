@@ -12,7 +12,6 @@ from PIL import Image
 import os
 import argparse
 import dill as pickle
-import util.coco
 from collections import OrderedDict
 from torch import nn
 from scipy.ndimage.filters import gaussian_filter

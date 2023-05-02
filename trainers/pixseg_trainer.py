@@ -33,32 +33,40 @@ class PixSegTrainer():
         self.generated = None
         self.seg = None
         if opt.isTrain:
-            #self.optimizer_G, self.optimizer_D, self.optimizer_S = self.model.create_optimizers(opt)
-            self.optimizer_G, self.optimizer_D = self.model.create_optimizers(opt)
-            self.optimizer_S = None
+            self.optimizer_G, self.optimizer_D, self.optimizer_S = self.model.create_optimizers(opt)
+            #self.optimizer_G, self.optimizer_D = self.model.create_optimizers(opt)
+            #self.optimizer_S = None
             self.lr_scheduler_G = torch.optim.lr_scheduler.LambdaLR(optimizer=self.optimizer_G,\
                     lr_lambda=LambdaLinear(self.opt.niter + self.opt.niter_decay, self.opt.niter).step)
 
             if self.optimizer_S is not None:
-                self.lr_scheduler_S= torch.optim.lr_scheduler.LambdaLR(optimizer=self.optimizer_S,\
-                    lr_lambda=LambdaLinear(self.opt.niter + self.opt.niter_decay, 0).step)
-            
+                #self.lr_scheduler_S= torch.optim.lr_scheduler.LambdaLR(optimizer=self.optimizer_S,\
+                #    lr_lambda=LambdaLinear(self.opt.niter + self.opt.niter_decay, 0).step)
+
+                self.lr_scheduler_S = torch.optim.lr_scheduler.StepLR(optimizer=self.optimizer_S,step_size=50, gamma=0.1)
+            else:
+                self.lr_scheduler_S = None
             if self.optimizer_D is not None:
                 self.lr_scheduler_D = torch.optim.lr_scheduler.LambdaLR(optimizer=self.optimizer_D,\
                     lr_lambda=LambdaLinear(self.opt.niter + self.opt.niter_decay, self.opt.niter).step)
             else:
                 self.lr_scheduler_D = None
 
+            print(self.optimizer_G, self.optimizer_S, self.optimizer_D)
+
     def run_generator_one_step(self, data):
         self.optimizer_G.zero_grad()
-        #self.optimizer_S.zero_grad()
+        if self.optimizer_S is not None:
+            self.optimizer_S.zero_grad()
         g_losses, generated, seg = self.model(data, mode='generator')
         print(g_losses)
-        #g_loss = sum(g_losses.values()).mean()
         g_loss = self.opt.lambda_L1 * g_losses['L1'] + g_losses['GAN'] + self.opt.lambda_feat * g_losses['GAN_Feat'] + \
                 self.opt.lambda_seg * g_losses['seg'] + self.opt.lambda_ll * g_losses['latent_loss']
+        #g_loss = self.opt.lambda_seg * g_losses['seg'] + self.opt.lambda_ll * g_losses['latent_loss']
         self.scaler.scale(g_loss).backward()
         self.scaler.step(self.optimizer_G)
+        if self.optimizer_S is not None:
+            self.scaler.step(self.optimizer_S)
         self.scaler.update()
         return g_losses, generated, seg
 
@@ -71,9 +79,6 @@ class PixSegTrainer():
         self.scaler.scale(d_loss).backward()
         self.scaler.step(self.optimizer_D)
         self.scaler.update()
-        #d_loss.backward()
-        #self.optimizer_D.step()
-        #self.d_losses = d_losses
     
     def run_evalutation_during_training(self, dataloader):
         num_val = len(dataloader)
@@ -100,4 +105,5 @@ class PixSegTrainer():
     def update_learning_rate(self, epoch):
         self.lr_scheduler_D.step()
         self.lr_scheduler_G.step()
-        #self.lr_scheduler_S.step()
+        if self.lr_scheduler_S is not None:
+            self.lr_scheduler_S.step()

@@ -52,7 +52,8 @@ class ASAPNetsMultiSeg_nnunet_feat(BaseNetwork):
         # calculates the total downsampling factor in order to get the final low-res grid of parameters (S=S1xS2 in sec. 3.2)
         #self.downsampling = pow(2, opt.ds_factor)
         if dropout:
-            dropout_op_kwargs = {'p':0.5, 'inplace':True}
+            #dropout_op_kwargs = {'p':0.2, 'inplace':True}
+            dropout_op_kwargs = {'p':0, 'inplace':True}
             self.block = Bottleneckdropout
         else:
             dropout_op_kwargs = {'p':0, 'inplace':True}
@@ -93,12 +94,9 @@ class ASAPNetsMultiSeg_nnunet_feat(BaseNetwork):
         seg = self.seg_stream(seg_input)
         return output, seg, features#, lowres
 
-class ASAPNetsMultiSeg_nnunet(BaseNetwork):
-    def __init__(self, opt, n_classes, hr_stream=None, lr_stream=None, fast=False):
-        super(ASAPNetsMultiSeg_nnunet, self).__init__()
-        if lr_stream is None or hr_stream is None:
-            lr_stream = dict()
-            hr_stream = dict()
+class ASAPNetsMultiSeg_nnunetonly_feat(BaseNetwork):
+    def __init__(self, opt, n_classes, dropout=False):
+        super(ASAPNetsMultiSeg_nnunetonly_feat, self).__init__()
         self.num_inputs = opt.label_nc
         self.num_outputs = opt.output_nc
         self.n_classes = n_classes
@@ -106,15 +104,121 @@ class ASAPNetsMultiSeg_nnunet(BaseNetwork):
         self.gpu_ids = opt.gpu_ids
         # calculates the total downsampling factor in order to get the final low-res grid of parameters (S=S1xS2 in sec. 3.2)
         #self.downsampling = pow(2, opt.ds_factor)
-        self.lowres_stream = Encoder_fpn4(num_in=self.num_inputs, block=Bottleneck_in, num_blocks=[2,4,23,3])
+        if dropout:
+            dropout_op_kwargs = {'p':0.2, 'inplace':True}
+            #dropout_op_kwargs = {'p':0, 'inplace':True}
+            self.block = Bottleneckdropout
+        else:
+            dropout_op_kwargs = {'p':0, 'inplace':True}
+            self.block = Bottleneck_in
+        norm_op_kwargs = {'eps':1e-05, 'affine':True}
+        net_nonline_kwargs = {'negative_slope': 0.01, 'inplace': True}
+        num_pool_op_kernel_size = [[2,2],[2,2],[2,2],[2,2],[2,2]]
+        net_conv_kernel_size = [[3,3],[3,3],[3,3],[3,3],[3,3],[3,3]]
+        
+        self.lowres_stream = Encoder_fpn4(num_in=self.num_inputs, block=self.block, num_blocks=[2,4,23,3])
+        self.highres_stream = ASAPfunctaHRStreamfulres( num_inputs=self.num_inputs,
+                                               num_outputs=opt.output_nc, width=opt.hr_width,
+                                               depth=opt.hr_depth, coordinates=opt.hr_coor)
+        
+        num_params = self.highres_stream.num_params
+        self.latlayers = nn.Conv2d(256, num_params, kernel_size=1, stride=1,padding=0)
+        self.seg_stream = SegNet(input_channels=4+256, base_num_features=32, num_classes=4, num_pool=5,num_conv_per_stage=2,\
+                feat_map_mul_on_downscale=2,conv_op=torch.nn.Conv2d, norm_op=torch.nn.InstanceNorm2d, norm_op_kwargs=norm_op_kwargs,\
+                dropout_op=torch.nn.Dropout2d,dropout_op_kwargs=dropout_op_kwargs, nonlin=torch.nn.LeakyReLU,\
+                nonlin_kwargs=net_nonline_kwargs,deep_supervision=True, dropout_in_localization=False,final_nonlin=lambda x:x,\
+                #nonlin_kwargs=net_nonline_kwargs,deep_supervision=True, dropout_in_localization=True,final_nonlin=lambda x:x,\
+               weightInitializer=InitWeights_He(1e-2), pool_op_kernel_sizes=num_pool_op_kernel_size, conv_kernel_sizes=net_conv_kernel_size,\
+               upscale_logits=False,convolutional_pooling=True,convolutional_upsampling=True)
+        
+        self.init = InitWeights_me(opt.init_type, opt.init_variance)
+        self.lowres_stream.apply(self.init)
+        self.latlayers.apply(self.init)
+        self.highres_stream.apply(self.init)
+
+    def use_gpu(self):
+        return len(self.gpu_ids) > 0
+
+    def forward(self, highres):
+        features = self.lowres_stream(highres)
+        features = self.latlayers(features)
+        seg_input = torch.cat([highres, features], dim=1)
+        seg = self.seg_stream(seg_input)
+        return None, seg, features
+
+class ASAPNetsMultiSeg_nnunet_fullres(BaseNetwork):
+    def __init__(self, opt, n_classes, use_dropout=False):
+        super(ASAPNetsMultiSeg_nnunet_fullres, self).__init__()
+        self.num_inputs = opt.label_nc
+        self.num_outputs = opt.output_nc
+        self.n_classes = n_classes
+        self.use_dropout = use_dropout
+        self.learned_ds_factor = opt.learned_ds_factor #(S2 in sec. 3.2)
+        self.gpu_ids = opt.gpu_ids
+        if self.use_dropout:
+            dropout_op_kwargs = {'p':0, 'inplace':True}
+            self.block = Bottleneckdropout
+        else:
+            dropout_op_kwargs = {'p':0, 'inplace':True}
+            self.block = Bottleneck_in
+
+        self.lowres_stream = Encoder_fpn4(num_in=self.num_inputs, block=self.block, num_blocks=[2,4,23,3])
         
         self.highres_stream = ASAPfunctaHRStreamfulres( num_inputs=self.num_inputs,
                                                num_outputs=opt.output_nc, width=opt.hr_width,
-                                               depth=opt.hr_depth, coordinates=opt.hr_coor,**hr_stream)
+                                               depth=opt.hr_depth, coordinates=opt.hr_coor)
         num_params = self.highres_stream.num_params
         self.latlayers = nn.Conv2d(256, num_params, kernel_size=1, stride=1,padding=0)
         norm_op_kwargs = {'eps':1e-05, 'affine':True}
-        dropout_op_kwargs = {'p':0, 'inplace':True}
+        net_nonline_kwargs = {'negative_slope': 0.01, 'inplace': True}
+        num_pool_op_kernel_size = [[2,2],[2,2],[2,2],[2,2],[2,2]]
+        net_conv_kernel_size = [[3,3],[3,3],[3,3],[3,3],[3,3],[3,3]]
+        self.seg_stream = SegNet(input_channels=4, base_num_features=32, num_classes=4, num_pool=5,num_conv_per_stage=2,\
+                feat_map_mul_on_downscale=2,conv_op=torch.nn.Conv2d, norm_op=torch.nn.InstanceNorm2d, norm_op_kwargs=norm_op_kwargs,\
+                dropout_op=torch.nn.Dropout2d,dropout_op_kwargs=dropout_op_kwargs, nonlin=torch.nn.LeakyReLU,\
+                nonlin_kwargs=net_nonline_kwargs,deep_supervision=True, dropout_in_localization=False,final_nonlin=lambda x:x,\
+               weightInitializer=InitWeights_He(1e-2), pool_op_kernel_sizes=num_pool_op_kernel_size, conv_kernel_sizes=net_conv_kernel_size,\
+               upscale_logits=False,convolutional_pooling=True,convolutional_upsampling=True)
+        
+        self.init = InitWeights_me(opt.init_type, opt.init_variance)
+        self.lowres_stream.apply(self.init)
+        self.latlayers.apply(self.init)
+        self.highres_stream.apply(self.init)
+
+    def use_gpu(self):
+        return len(self.gpu_ids) > 0
+
+    def forward(self, highres):
+        features = self.lowres_stream(highres)
+        features = self.latlayers(features)
+        output = self.highres_stream(highres, features)
+        seg = self.seg_stream(output)
+        return output, seg, features#, lowres
+
+class ASAPNetsMultiSeg_nnunet(BaseNetwork):
+    def __init__(self, opt, n_classes, use_dropout=False):
+        super(ASAPNetsMultiSeg_nnunet, self).__init__()
+        self.num_inputs = opt.label_nc
+        self.num_outputs = opt.output_nc
+        self.n_classes = n_classes
+        self.use_dropout = use_dropout
+        self.learned_ds_factor = opt.learned_ds_factor #(S2 in sec. 3.2)
+        self.gpu_ids = opt.gpu_ids
+        if self.use_dropout:
+            dropout_op_kwargs = {'p':0, 'inplace':True}
+            self.block = Bottleneckdropout
+        else:
+            dropout_op_kwargs = {'p':0, 'inplace':True}
+            self.block = Bottleneck_in
+
+        self.lowres_stream = Encoder_fpn4(num_in=self.num_inputs, block=self.block, num_blocks=[2,4,23,3])
+        
+        self.highres_stream = ASAPfunctaHRStreamfulres( num_inputs=self.num_inputs,
+                                               num_outputs=opt.output_nc, width=opt.hr_width,
+                                               depth=opt.hr_depth, coordinates=opt.hr_coor)
+        num_params = self.highres_stream.num_params
+        self.latlayers = nn.Conv2d(256, num_params, kernel_size=1, stride=1,padding=0)
+        norm_op_kwargs = {'eps':1e-05, 'affine':True}
         net_nonline_kwargs = {'negative_slope': 0.01, 'inplace': True}
         num_pool_op_kernel_size = [[2,2],[2,2],[2,2],[2,2],[2,2]]
         net_conv_kernel_size = [[3,3],[3,3],[3,3],[3,3],[3,3],[3,3]]

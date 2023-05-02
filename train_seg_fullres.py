@@ -10,7 +10,7 @@ from collections import OrderedDict
 from wandb.sdk.wandb_run import wandb_metric
 from options.base_options import data
 from options.train_options import TrainOptions
-from data.mri_dataset import MriDataset, MriDataset_DA
+from data.mri_dataset import MriDataset, MriDataset_MM
 from train import setup_seed
 from util.iter_counter import IterationCounter
 from util.visualizer import Visualizer
@@ -59,8 +59,8 @@ if __name__=='__main__':
 
     # input/output sizes
     parser.add_argument('--batchSize', type=int, default=8, help='input batch size')
-    parser.add_argument('--label_nc', type=int, default=3, help='# of input label classes without unknown class. If you have unknown class as class label, specify --contain_dopntcare_label.')
-    parser.add_argument('--output_nc', type=int, default=1, help='# of output image channels')
+    parser.add_argument('--label_nc', type=int, default=4, help='# of input label classes without unknown class. If you have unknown class as class label, specify --contain_dopntcare_label.')
+    parser.add_argument('--output_nc', type=int, default=4, help='# of output image channels')
 
     # Hyperparameters
     parser.add_argument('--learned_ds_factor', type=int, default=16, help='enables partial learned_ds (S2 in sec. 3.2)')
@@ -169,15 +169,17 @@ if __name__=='__main__':
     data_root = dataset_dict['dataset_dir']
     input_modal = dataset_dict['input_modalities']
     output_modal = dataset_dict['output_modality']
-
+    
+    modal_dict = ['t1','t1ce','t2','flair']
     transform_tr = transforms.Compose([
                         transforms.RandomApply([transforms.ColorJitter(brightness=0.2, contrast=0.2)], p=0.15),
                         transforms.RandomApply([transforms.GaussianBlur(kernel_size=3,sigma=(0.5,1.0))], p=0.2),
                         AddGaussianNoise(0,0.01)])
     
     train_dataroot = os.path.join(data_root, 'train_data')
-    train_instance = MriDataset_DA(train_dataroot, 'patientlist.txt', \
-                    input_modal, output_modal,(img_height, img_width),transform_tr, True)
+    #train_instance = MriDataset(train_dataroot, 'patientlist.txt', input_modal, output_modal,(img_height, img_width))
+    train_instance = MriDataset_MM(train_dataroot, 'patientlist.txt', 
+            modal_dict, (img_height, img_width),transform_tr, True)
     print("dataset [%s] of size %d was created" %
             (type(train_instance).__name__, len(train_instance)))
     dataloader = DataLoader(
@@ -189,8 +191,9 @@ if __name__=='__main__':
     )
 
     val_dataroot = os.path.join(data_root, 'valid_data')
-    val_instance = MriDataset_DA(val_dataroot, 'patientlist_valid.txt', \
-                    input_modal, output_modal,(img_height, img_width), None,False)
+    #val_instance = MriDataset(val_dataroot, 'patientlist_valid.txt', input_modal, output_modal,(img_height, img_width))
+    val_instance = MriDataset_MM(val_dataroot, 'patientlist_valid.txt', \
+                    modal_dict,(img_height, img_width), None,False)
     print("dataset [%s] of size %d was created" %
             (type(val_instance).__name__, len(val_instance)))
 
@@ -267,10 +270,12 @@ if __name__=='__main__':
         pred_seg = pred_seg[0].argmax(dim=1).unsqueeze(1).float()              #type:ignore
         for i in range(data_i['label'].shape[1]):
             logs['input_img_'+str(i)] = wandb.Image(data_i['label'][:,i,:,:].unsqueeze(1))
-        logs['prediction'] = wandb.Image(pred_img)
+        for i in range(pred_img.shape[1]):
+            logs['prediction_'+str(i)] = wandb.Image(pred_img[:,i,:,:].unsqueeze(1))
         logs['segmentation'] = wandb.Image(pred_seg)
         logs['groundtruth'] = wandb.Image(data_i['seg'][0].float())
-        logs['real_image']= wandb.Image(data_i['image'])
+        for i in range(data_i['image'].shape[1]):
+            logs['real_image_'+str(i)]= wandb.Image(data_i['image'][:,i,:,:].unsqueeze(1))
         wandb.log(logs)
         print('saving the model at the end of epoch %d' % epoch)
         trainer.save('latest')

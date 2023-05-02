@@ -10,7 +10,7 @@ from collections import OrderedDict
 from wandb.sdk.wandb_run import wandb_metric
 from options.base_options import data
 from options.train_options import TrainOptions
-from data.mri_dataset import MriDataset, MriDataset_DA
+from data.mri_dataset import MriDataset, MriDataset_DA, MriDataset_MM
 from train import setup_seed
 from util.iter_counter import IterationCounter
 from util.visualizer import Visualizer
@@ -176,9 +176,10 @@ if __name__=='__main__':
                         transforms.RandomApply([transforms.GaussianBlur(kernel_size=3,sigma=(0.5,1.0))], p=0.2),
                         AddGaussianNoise(0,0.01)])
     
+    #modal_dict = ['t1','t1ce','t2','flair']
     train_dataroot = os.path.join(data_root, 'train_data')
     train_instance = MriDataset_DA(train_dataroot, 'patientlist.txt', \
-                    input_modal, output_modal,(img_height, img_width),transform_tr, True)
+                    input_modal,output_modal,(img_height, img_width),transform_tr, True)
     print("dataset [%s] of size %d was created" %
             (type(train_instance).__name__, len(train_instance)))
     dataloader = DataLoader(
@@ -188,10 +189,10 @@ if __name__=='__main__':
         num_workers=int(opt.nThreads),
         drop_last=opt.isTrain
     )
-
+    ''' 
     val_dataroot = os.path.join(data_root, 'valid_data')
     val_instance = MriDataset_DA(val_dataroot, 'patientlist_valid.txt', \
-                    input_modal, output_modal,(img_height, img_width), None,False)
+                    input_modal,output_modal,(img_height, img_width), None,False)
     print("dataset [%s] of size %d was created" %
             (type(val_instance).__name__, len(val_instance)))
 
@@ -202,6 +203,7 @@ if __name__=='__main__':
         num_workers=int(opt.nThreads),
         drop_last=opt.isTrain
     )
+    ''' 
     experiment_dir = os.path.join(opt.checkpoints_dir, opt.name)
     if not os.path.isdir(experiment_dir):
         os.mkdir(experiment_dir)
@@ -227,7 +229,6 @@ if __name__=='__main__':
     start_epoch = 1
     
     #for epoch in iter_counter.training_epochs():
-    val_seg_loss, generated_img = trainer.run_evalutation_during_training(val_dataloader)
     for epoch in range(1, total_epochs + 1):
         epoch_start_time = time.time()
         #iter_counter.record_epoch_start(epoch)
@@ -248,8 +249,8 @@ if __name__=='__main__':
         logs = {}
         logs['seg_loss'] = seg_loss / batches_per_epoch
         ##evaluation
-        val_seg_loss, generated_img = trainer.run_evalutation_during_training(val_dataloader)
-        logs['val_seg_loss'] = val_seg_loss
+        #val_seg_loss, generated_img = trainer.run_evalutation_during_training(val_dataloader)
+        #logs['val_seg_loss'] = val_seg_loss
 
         #pred_seg = trainer.get_latest_generated()
         pred_seg = pred_seg[0].argmax(dim=1).unsqueeze(1).float()              #type:ignore

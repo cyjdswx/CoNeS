@@ -8,7 +8,7 @@
     }, 
 
     "dataset": {
-        "dataset_dir": "/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/003_1-1norm",
+        "dataset_dir": "/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/010_brats18_preprocessed",
         "img_channels": 1,
         "img_height": 128,
         "img_width": 160,

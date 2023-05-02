@@ -629,13 +629,13 @@ class Bottleneckdropout(nn.Module):
     def __init__(self, in_planes, planes, stride=1):
         super(Bottleneckdropout, self).__init__()
         self.conv1 = nn.Conv2d(in_planes, planes, kernel_size=1, bias=False)
-        self.dropout1 = nn.Dropout2d(p=0.5, inplace=True)
+        self.dropout1 = nn.Dropout2d(p=0.2, inplace=True)
         self.bn1 = nn.InstanceNorm2d(planes, affine=True)
         self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
-        self.dropout2 = nn.Dropout2d(p=0.5, inplace=True)
+        self.dropout2 = nn.Dropout2d(p=0.2, inplace=True)
         self.bn2 = nn.InstanceNorm2d(planes, affine=True)
         self.conv3 = nn.Conv2d(planes, self.expansion*planes, kernel_size=1, bias=False)
-        self.dropout3 = nn.Dropout2d(p=0.5, inplace=True)
+        self.dropout3 = nn.Dropout2d(p=0.2, inplace=True)
         self.bn3 = nn.InstanceNorm2d(self.expansion*planes, affine=True)
 
         self.shortcut = nn.Sequential()

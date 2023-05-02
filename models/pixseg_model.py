@@ -6,7 +6,7 @@ Licensed under the CC BY-NC-SA 4.0 license (https://creativecommons.org/licenses
 import torch
 import models.networks as networks
 from models.networks.generator import ASAPfunctaGeneratorV3
-from models.networks.segmentation import InitWeights_He, SegNet, ASAPNetsMultiSeg_nnunet, ASAPNetsMultiSeg_nnunet_feat
+from models.networks.segmentation import InitWeights_He, SegNet, ASAPNetsMultiSeg_nnunet, ASAPNetsMultiSeg_nnunet_feat, ASAPNetsMultiSeg_nnunetonly_feat, ASAPNetsMultiSeg_nnunet_fullres
 import util.util as util
 import torch.nn.functional as F
 from scipy.ndimage.morphology import distance_transform_edt as DistTransform
@@ -79,10 +79,11 @@ class PixSegModel(torch.nn.Module):
 
     def create_optimizers(self, opt):
         G_params = list(self.netG.parameters())
-        #if self.netS is not None:
-        #    S_params = list(self.netS.parameters())
-        #G_params = list(self.netG.lowres_stream.parameters())+list(self.netG.latlayers.parameters()) + list(self.netG.highres_stream.parameters())
-        #S_params = list(self.netG.seg_stream.parameters())
+        S_params = None
+        #G_params = list(self.netG.lowres_stream.parameters()) + \
+        #        list(self.netG.latlayers.parameters()) + list(self.netG.highres_stream.parameters())
+        #S_params = list(self.netG.lowres_stream.parameters()) + \
+        #        list(self.netG.latlayers.parameters()) + list(self.netG.highres_stream.parameters()) + list(self.netG.seg_stream.parameters())
         if opt.isTrain and self.netD is not None:
             D_params = list(self.netD.parameters())
         else:
@@ -95,13 +96,17 @@ class PixSegModel(torch.nn.Module):
             G_lr, D_lr = opt.lr / 2, opt.lr * 2
 
         optimizer_G = torch.optim.Adam(G_params, lr=G_lr, betas=(beta1, beta2), weight_decay=3e-5)
-        #optimizer_S = torch.optim.Adam(S_params, lr=opt.lr, betas=(beta1,beta2), weight_decay=3e-5)
+        if S_params is not None:
+            #optimizer_S = torch.optim.Adam(S_params, lr=opt.lr, betas=(beta1,beta2), weight_decay=3e-5)
+            optimizer_S = torch.optim.SGD(S_params, lr=0.05, momentum=0.9, weight_decay=3e-5)
+        else:
+            optimizer_S = None
         if D_params is not None:
             optimizer_D = torch.optim.Adam(D_params, lr=D_lr, betas=(beta1, beta2))
         else:
             optimizer_D = None
         
-        return optimizer_G, optimizer_D#, optimizer_S
+        return optimizer_G, optimizer_D, optimizer_S
 
     def save(self, epoch):
         util.save_network(self.netG, 'G', epoch, self.opt)
@@ -113,9 +118,10 @@ class PixSegModel(torch.nn.Module):
     ############################################################################
 
     def initialize_networks(self, opt):
-        #netG = ASAPNetsMultiSeg_nnunet(opt,n_classes=4)
-        netG = ASAPNetsMultiSeg_nnunet_feat(opt,n_classes=4, dropout=False)
+        netG = ASAPNetsMultiSeg_nnunet_fullres(opt,n_classes=4, use_dropout=True)
+        #netG = ASAPNetsMultiSeg_nnunet(opt,n_classes=4, use_dropout=True)
         #netG = ASAPNetsMultiSeg_nnunet_feat(opt,n_classes=4, dropout=True)
+        #netG = ASAPNetsMultiSeg_nnunetonly_feat(opt,n_classes=4, dropout=True)
         netG.print_network()
         if len(opt.gpu_ids) > 0:
             assert(torch.cuda.is_available())

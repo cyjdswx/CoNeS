@@ -110,8 +110,8 @@ if __name__=='__main__':
     seg_dir = os.path.join(save_dir, 'segmentation')
     if not os.path.isdir(seg_dir):
         os.mkdir(seg_dir)
-    #data_dir = '/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/004_rawdata/train_data'
-    data_dir = '/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/004_rawdata/valid_data'
+    data_dir = '/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/004_rawdata/train_data'
+    #data_dir = '/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/004_rawdata/valid_data'
     device = torch.device('cpu' if opt.gpu_ids == -1 else 'cuda')
     patch_size = (128,160)
     #patch_size = (160,192)
@@ -136,8 +136,8 @@ if __name__=='__main__':
             sys.exit()
     
     dataset_dict = configs['dataset']
-    input_modalities= dataset_dict['input_modalities']
-    
+    #input_modalities= dataset_dict['input_modalities']
+    input_modalities = ['t2','t1ce','t1','flair']
     for patient in patientlist:
         print(patient)
         image_list = []
@@ -171,6 +171,8 @@ if __name__=='__main__':
             data, slicer = pad_nd_image(data,new_shape=patch_size, mode='constant',kwargs={'constant_values':-1},return_slicer=True)
             image_size = (data.shape[1], data.shape[2])
             data = torch.from_numpy(data)
+            data[1,:,:] = 0
+
             data = data.to(device=device,dtype=torch.float32)
             step_size = 0.5
             steps = compute_steps_for_sliding_window(patch_size, image_size, step_size)
@@ -192,9 +194,9 @@ if __name__=='__main__':
                     with torch.no_grad():
                         data_to_test = data[None, :, lb_x:ub_x, lb_y:ub_y]
                         fake_img, seg = model(data_to_test, mode='inference')
-                        fake_img = torch.zeros_like(seg[0])
+                        #fake_img = torch.zeros_like(seg[0])
                         #fake_img = fake_img.squeeze(0)
-                        fake_img = fake_img[:,0,:,:].squeeze(0)
+                        fake_img = fake_img[:,1,:,:].squeeze(0)
                         aggregated_results[:,lb_x:ub_x,lb_y:ub_y] += fake_img
                         aggregated_nb_of_predictions[:,lb_x:ub_x,lb_y:ub_y] += add_for_nb_of_preds
                         

@@ -152,7 +152,6 @@ class UnetModel(torch.nn.Module):
     def compute_segmentation_loss(self, input_semantics,  mask):
         G_losses = {}
         seg = self.netG(input_semantics)
-
         ##segmentation
         #seg_los = DC_and_CE_loss({'batch_dice': self.batch_dice, 'smooth':1e-5,'dp_bg':False},{})
         #G_losses['seg'] = (self.criterionseg(seg, mask) + \
