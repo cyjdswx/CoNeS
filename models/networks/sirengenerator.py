@@ -135,31 +135,3 @@ class Siren(nn.Module):
         output= output.reshape((bs,1,h,w))
         #coords = self.xy_coords.clone().detach().requires_grad_(True) # allows to take derivative w.r.t. input
         return output, self.xy_coords
-    '''
-    def forward_with_activations(self, coords, retain_grad=False):
-        activations = OrderedDict()
-
-        activation_count = 0
-        x = coords.clone().detach().requires_grad_(True)
-        activations['input'] = x
-        for i, layer in enumerate(self.net):
-            if isinstance(layer, SineLayer):
-                x, intermed = layer.forward_with_intermediate(x)
-                
-                if retain_grad:
-                    x.retain_grad()
-                    intermed.retain_grad()
-                    
-                activations['_'.join((str(layer.__class__), "%d" % activation_count))] = intermed
-                activation_count += 1
-            else: 
-                x = layer(x)
-                
-                if retain_grad:
-                    x.retain_grad()
-                    
-            activations['_'.join((str(layer.__class__), "%d" % activation_count))] = x
-            activation_count += 1
-
-        return activations
-    '''

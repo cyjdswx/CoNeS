@@ -7,6 +7,7 @@ from models.networks.sync_batchnorm import DataParallelWithCallback
 from models.unet_model import UnetModel
 import torch
 from tqdm import tqdm
+from util.util import PolyLRScheduler
 
 class LambdaLinear:
     def __init__(self, n_epochs, decay_start_epoch):
@@ -32,8 +33,9 @@ class UnetTrainer():
         self.seg = None
         if opt.isTrain:
             self.optimizer_G= self.model.create_optimizers(opt)
-            self.lr_scheduler_G = torch.optim.lr_scheduler.LambdaLR(optimizer=self.optimizer_G,\
-                    lr_lambda=LambdaLinear(self.opt.niter + self.opt.niter_decay, self.opt.niter).step)
+            #self.lr_scheduler_G = torch.optim.lr_scheduler.LambdaLR(optimizer=self.optimizer_G,\
+            #        lr_lambda=LambdaLinear(self.opt.niter + self.opt.niter_decay, self.opt.niter).step)
+            self.lr_scheduler_G = PolyLRScheduler(self.optimizer_G, self.opt.lr, self.opt.niter + self.opt.niter_decay)
             #self.old_lr = opt.lr
 
     def run_generator_one_step(self, data):

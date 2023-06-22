@@ -31,14 +31,14 @@ class PixSegTrainer():
         self.model = PixSegModel(opt, device)
         self.scaler = GradScaler()
         self.generated = None
-        self.seg = None
         if opt.isTrain:
             self.optimizer_G, self.optimizer_D, self.optimizer_S = self.model.create_optimizers(opt)
             #self.optimizer_G, self.optimizer_D = self.model.create_optimizers(opt)
-            #self.optimizer_S = None
             self.lr_scheduler_G = torch.optim.lr_scheduler.LambdaLR(optimizer=self.optimizer_G,\
                     lr_lambda=LambdaLinear(self.opt.niter + self.opt.niter_decay, self.opt.niter).step)
 
+            #self.lr_scheduler_G = torch.optim.lr_scheduler.StepLR(optimizer=self.optimizer_G,step_size=50, gamma=0.1)
+            
             if self.optimizer_S is not None:
                 #self.lr_scheduler_S= torch.optim.lr_scheduler.LambdaLR(optimizer=self.optimizer_S,\
                 #    lr_lambda=LambdaLinear(self.opt.niter + self.opt.niter_decay, 0).step)
@@ -49,10 +49,12 @@ class PixSegTrainer():
             if self.optimizer_D is not None:
                 self.lr_scheduler_D = torch.optim.lr_scheduler.LambdaLR(optimizer=self.optimizer_D,\
                     lr_lambda=LambdaLinear(self.opt.niter + self.opt.niter_decay, self.opt.niter).step)
+                #self.lr_scheduler_D = torch.optim.lr_scheduler.StepLR(optimizer=self.optimizer_D,step_size=50, gamma=0.1)
             else:
                 self.lr_scheduler_D = None
 
             print(self.optimizer_G, self.optimizer_S, self.optimizer_D)
+            self.model.train()
 
     def run_generator_one_step(self, data):
         self.optimizer_G.zero_grad()
@@ -62,7 +64,6 @@ class PixSegTrainer():
         print(g_losses)
         g_loss = self.opt.lambda_L1 * g_losses['L1'] + g_losses['GAN'] + self.opt.lambda_feat * g_losses['GAN_Feat'] + \
                 self.opt.lambda_seg * g_losses['seg'] + self.opt.lambda_ll * g_losses['latent_loss']
-        #g_loss = self.opt.lambda_seg * g_losses['seg'] + self.opt.lambda_ll * g_losses['latent_loss']
         self.scaler.scale(g_loss).backward()
         self.scaler.step(self.optimizer_G)
         if self.optimizer_S is not None:
@@ -74,7 +75,6 @@ class PixSegTrainer():
         assert self.optimizer_D is not None
         self.optimizer_D.zero_grad()
         d_losses = self.model(data, mode='discriminator')
-        #d_loss = sum(d_losses.values()).mean()
         d_loss = d_losses['D_Fake'] + d_losses['D_real']
         self.scaler.scale(d_loss).backward()
         self.scaler.step(self.optimizer_D)
@@ -92,15 +92,10 @@ class PixSegTrainer():
                 val_seg_loss += g_losses['seg']
                 val_rec_loss += g_losses['L1']
         self.model.train()
-        return val_seg_loss/ num_val, val_rec_loss/ num_val, fake_img
+        return val_seg_loss/ num_val, val_rec_loss/ num_val
 
     def save(self, epoch):
-        #self.pix2pix_model_on_one_gpu.save(epoch)
         self.model.save(epoch)
-
-    ##################################################################
-    # Helper functions
-    ##################################################################
 
     def update_learning_rate(self, epoch):
         self.lr_scheduler_D.step()

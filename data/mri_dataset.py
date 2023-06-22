@@ -8,7 +8,7 @@ from torch.utils.data import Dataset
 import nibabel as nib
 from torchvision.utils import Tuple, save_image
 import torchvision.transforms.functional as F
-from torch import Tensor
+from torch import Tensor, from_numpy
 from typing import List, Union, Tuple
 from torchvision import transforms
 from batchgenerators.augmentations.utils import resize_segmentation
@@ -54,7 +54,6 @@ class randomCrop_mask(object):
         self.padding_mode = padding_mode
     
     @staticmethod
-    #def get_params(img : Tensor, patch_size : tuple[int,int]) -> Tuple[int,int,int,int]:
     def get_params(img : Tensor, patch_size):
         ##Get parameters for ``crop`` for a random crop.
         h = img.shape[0]
@@ -74,21 +73,17 @@ class randomCrop_mask(object):
     def __call__(self,imgs, seg):
         img_height = imgs[0].shape[0]
         img_width = imgs[0].shape[1]
-        #imgs = torch.tensor(np.zeros(imgs.shape[0], self.size[0], self.size[1]))
         if self.pad_if_needed and img_height < self.size[0]:
             padding = [0, self.size[0] - img_height]
-            #for i in range(imgs.shape[0]):
             imgs = F.pad(imgs,padding, self.fill, self.padding_mode)
             seg = F.pad(seg, padding, self.fill, self.padding_mode)
 
         if self.pad_if_needed and img_width < self.size[1]:
             padding = [self.size[1] - img_width, 0]
-            #for i in range(len(imgs)):
             imgs = F.pad(imgs, padding, self.fill, self.padding_mode)
             seg = F.pad(seg, padding, self.fill, self.padding_mode)
         
         x,y,h,w = self.get_params(imgs[0], self.size)
-        #for i in range(len(imgs)):
         imgs = F.crop(imgs, x, y, h, w)
         seg = F.crop(seg, x, y, h, w)
         return imgs, seg
@@ -157,14 +152,15 @@ class AddGaussianNoise(object):
 
 class MultiMRI2d(object):
 
-    def __init__(self, inputfiles, num_modalities):
+    def __init__(self, inputfiles, modal_dict):
         assert isinstance(inputfiles, list),\
                 "Class MultiMRI2d needs list of inputfiles"
         self.inputfiles = inputfiles
         self.images_handle = []
-        self.num_modalities = num_modalities
-        self.modal_dict = ['t2','t1ce','t1','flair', 'seg']
-        #for i in range(len(self.inputfiles)):
+        #self.num_modalities = num_modalities
+        #self.modal_dict = ['t2','t1ce','t1','flair', 'seg']
+        self.modal_dict = modal_dict
+        self.num_modalities = len(self.modal_dict)
         assert self.num_modalities == len(self.inputfiles),\
                 "missing or too much inputfiles"
 
@@ -178,8 +174,6 @@ class MultiMRI2d(object):
             self.images_handle.append(image_handle)
 
     def get_MRI_shape(self):
-        #for i in range(self.num_modalities):
-        #image_np = sitk.GetArrayFromImage(self.images_handle[0])
         shapes = self.images_handle[0].header.get_data_shape()
         return shapes
 
@@ -190,28 +184,28 @@ class MultiMRI2d(object):
         return image_data
 
     def get_img_data_dict(self, modal):
-        #assert index >= 0 and index < self.num_modalities,\
-        #        "incorrect index"
         index = self.modal_dict.index(modal)
         image_data =  np.asarray(self.images_handle[index].dataobj)
         return image_data
 
-
-class MriDataset_DA(Dataset):
-    def __init__(self, dataroot , filelist, \
-            input_modal, output_modal, patch_size, transform, is_train) -> None:
-        super(MriDataset_DA, self).__init__()
-        self.modal_dict = ['t2','t1ce','t1','flair', 'seg']
+class MriDataset_noseg(Dataset):
+    def __init__(self, dataroot, filelist, modal_dict, \
+            input_modal, output_modal, patch_size, deep_supervision, transform, is_train) -> None:
+        super(MriDataset_noseg, self).__init__()
+        self.modal_dict = modal_dict
         self.dataroot = dataroot
         self.patch_size = patch_size
         self.transform = transform
-        #self.transform_color = transform_color
         self.img_handlers = []
         self.slice_list = []
         self.filelist = filelist
         self.input_modal = input_modal
         self.output_modal = output_modal
-        self.randcrop = randomCrop_mask(self.patch_size)
+        if is_train:
+            self.crop = transforms.RandomCrop(self.patch_size, padding=None, pad_if_needed=True, fill=0)
+        else:
+            self.crop = transforms.CenterCrop(self.patch_size)
+        self.deep_supervision = deep_supervision
         self.istrain = is_train
         with open(os.path.join(self.dataroot, self.filelist)) as f:
             self.patientlist = f.read().splitlines()
@@ -227,7 +221,114 @@ class MriDataset_DA(Dataset):
                         "missing file"
                 img_list.append(filename)
             print(patient)
-            MRI = MultiMRI2d(img_list, len(self.modal_dict))
+            #MRI = MultiMRI2d(img_list, len(self.modal_dict))
+            MRI = MultiMRI2d(img_list, self.modal_dict)
+            self.img_handlers.append(MRI)
+
+    def __get_indexes(self):
+        for handle in self.img_handlers:
+            input_data_shape = handle.get_MRI_shape()
+            for slice in range(input_data_shape[2]):
+                sample_index = (handle,slice)
+                self.slice_list.append(sample_index)
+    
+    def __len__(self):
+        return len(self.slice_list)
+
+    def __getitem__(self, index):
+        img_handle = self.slice_list[index][0]
+        slice_index = self.slice_list[index][1]
+        images = []
+        for i in self.input_modal:
+            image = img_handle.get_img_data_dict(i)
+            image = image[...,int(slice_index)]
+            image = torch.from_numpy(image)
+            image = image.unsqueeze(0)
+            images.append(image)
+        for i in self.output_modal:
+            image = img_handle.get_img_data_dict(i)
+            image = image[...,int(slice_index)]
+            image = torch.from_numpy(image)
+            image = image.unsqueeze(0)
+            images.append(image)
+        images = torch.cat(images,dim=0)
+        images = (images + 1) / 2
+        
+
+        #segmentation = img_handle.get_img_data_dict('seg')
+        #segmentation = segmentation[...,int(slice_index)]
+        #segmentation = torch.from_numpy(segmentation)
+        #segmentation  = segmentation.unsqueeze(0)
+        if self.istrain and self.transform is not None:
+            ## randon flip ##
+            if torch.rand(1) < 0.5:
+                images = F.hflip(images)
+                #segmentation = F.hflip(segmentation)
+            if torch.rand(1) < 0.5:
+                images = F.vflip(images)
+                #segmentation = F.vflip(segmentation)
+            ## random rotation ##
+            d = transforms.RandomRotation.get_params([-30, 30])
+            images = F.rotate(images,d, F.InterpolationMode.BILINEAR,fill=0)
+            #segmentation = F.rotate(segmentation, d, F.InterpolationMode.NEAREST, fill=0)
+        #imageseg = torch.cat([images, segmentation], dim=0)
+        images = self.crop(images)
+        
+        inputs = images[0:len(self.input_modal),:,:]
+        outputs = images[len(self.input_modal):len(self.input_modal) + len(self.output_modal),:,:]
+        #segmentation = imageseg[len(self.input_modal) + len(self.output_modal):,:,:]
+        if self.istrain and self.transform is not None:
+            for i in range(inputs.shape[0]):
+                if torch.rand(1) < 0.2:
+                    gamma = 0.8 * torch.rand(1) + 0.7
+                    inputs[i,:,:] = F.adjust_gamma(inputs[i,:,:],gamma=gamma)
+                if self.transform is not None:
+                    inputs[i,:,:] = self.transform(inputs[i,:,:].unsqueeze(0))
+        inputs[inputs<0] = 0
+        inputs[inputs>1] = 1
+        inputs = inputs  * 2 - 1
+        outputs = outputs  * 2 - 1
+        input_dict = {'label': inputs,
+                      'image': outputs
+                      }
+        return input_dict
+
+class MriDataset_DA(Dataset):
+    def __init__(self, dataroot, filelist, modal_dict, \
+            input_modal, output_modal, patch_size, deep_supervision, transform, is_train) -> None:
+        super(MriDataset_DA, self).__init__()
+        #self.modal_dict = ['t2','t1ce','t1','flair', 'seg']
+        self.modal_dict = modal_dict
+        self.dataroot = dataroot
+        self.patch_size = patch_size
+        self.transform = transform
+        self.img_handlers = []
+        self.slice_list = []
+        self.filelist = filelist
+        self.input_modal = input_modal
+        self.output_modal = output_modal
+        if is_train:
+            self.crop = transforms.RandomCrop(self.patch_size, padding=None, pad_if_needed=True, fill=0)
+        else:
+            self.crop = transforms.CenterCrop(self.patch_size)
+        self.deep_supervision = deep_supervision
+        self.istrain = is_train
+        with open(os.path.join(self.dataroot, self.filelist)) as f:
+            self.patientlist = f.read().splitlines()
+        self.__load_images()
+        self.__get_indexes()
+        
+    def __load_images(self):
+        for patient in self.patientlist:
+            img_list = []
+            for i in range(len(self.modal_dict)):
+                filename = os.path.join(self.dataroot, patient, patient + '_' + self.modal_dict[i] + '.nii.gz')
+                assert os.path.isfile(filename), \
+                        "missing file"
+                img_list.append(filename)
+            print(patient)
+            #MRI = MultiMRI2d(img_list, len(self.modal_dict))
+            MRI = MultiMRI2d(img_list, self.modal_dict)
             self.img_handlers.append(MRI)
 
     def __get_indexes(self):
@@ -261,7 +362,7 @@ class MriDataset_DA(Dataset):
         segmentation = segmentation[...,int(slice_index)]
         segmentation = torch.from_numpy(segmentation)
         segmentation  = segmentation.unsqueeze(0)
-        if self.istrain:
+        if self.istrain and self.transform is not None:
             ## randon flip ##
             if torch.rand(1) < 0.5:
                 images = F.hflip(images)
@@ -273,26 +374,27 @@ class MriDataset_DA(Dataset):
             d = transforms.RandomRotation.get_params([-30, 30])
             images = F.rotate(images,d, F.InterpolationMode.BILINEAR,fill=0)
             segmentation = F.rotate(segmentation, d, F.InterpolationMode.NEAREST, fill=0)
-        ## random crop ##
-        images, segmentation = self.randcrop(images, segmentation)
-
-        inputs = images[0:len(self.input_modal),:,:]
-        outputs = images[len(self.input_modal):len(self.input_modal) + len(self.output_modal),:,:]
-        if self.istrain:
+        imageseg = torch.cat([images, segmentation], dim=0)
+        imageseg = self.crop(imageseg)
+        
+        inputs = imageseg[0:len(self.input_modal),:,:]
+        outputs = imageseg[len(self.input_modal):len(self.input_modal) + len(self.output_modal),:,:]
+        segmentation = imageseg[len(self.input_modal) + len(self.output_modal):,:,:]
+        if self.istrain and self.transform is not None:
             for i in range(inputs.shape[0]):
                 if torch.rand(1) < 0.2:
                     gamma = 0.8 * torch.rand(1) + 0.7
                     inputs[i,:,:] = F.adjust_gamma(inputs[i,:,:],gamma=gamma)
-                inputs[i,:,:] = self.transform(inputs[i,:,:].unsqueeze(0))
+                if self.transform is not None:
+                    inputs[i,:,:] = self.transform(inputs[i,:,:].unsqueeze(0))
         inputs[inputs<0] = 0
         inputs[inputs>1] = 1
         inputs = inputs  * 2 - 1
         outputs = outputs  * 2 - 1
-        if True:
+        if self.deep_supervision:
             ds_scales = [[1,1,1],[0.5,0.5],[0.25,0.25],[0.125,0.125],[0.0625,0.0625]]
             segmentation = segmentation.unsqueeze(0).numpy()
             segmentation = downsample_seg_for_ds_transform2(segmentation, ds_scales=ds_scales,order=0,axes=[2,3])
-        
         input_dict = {'label': inputs,
                       'seg': segmentation,
                       'image': outputs
@@ -401,15 +503,6 @@ class MriDataset_MM(Dataset):
         inputs = inputs  * 2 - 1
         outputs = outputs  * 2 - 1
         
-        '''
-        randomly select existing images
-        '''
-        biarray = np.random.choice([0,1], size=inputs.shape[0])
-        while not any(biarray):
-            biarray = np.random.choice([0,1], size=inputs.shape[0])
-        for i in range(inputs.shape[0]):
-            if not biarray[i]:
-                inputs[i,:,:] = 0
         if True:
             ds_scales = [[1,1,1],[0.5,0.5],[0.25,0.25],[0.125,0.125],[0.0625,0.0625]]
             segmentation = segmentation.unsqueeze(0).numpy()
@@ -458,6 +551,7 @@ class MriDataset(Dataset):
                         "missing file"
                 img_list.append(filename)
             print(patient)
+            #MRI = MultiMRI2d(img_list, len(self.modal_dict))
             MRI = MultiMRI2d(img_list, len(self.modal_dict))
             self.img_handlers.append(MRI)
 

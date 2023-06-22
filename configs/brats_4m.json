@@ -8,12 +8,13 @@
     }, 
 
     "dataset": {
-        "dataset_dir": "/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/010_brats18_preprocessed",
+        "dataset_dir": "/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/003_1-1norm",
         "img_channels": 1,
         "img_height": 128,
         "img_width": 160,
         "input_modalities": ["t1", "t2","flair"],
         "output_modality": ["t1ce"],
+        "modal_dict": ["t1", "t1ce", "t2", "flair", "seg"], 
         "classes": 3
     },
 

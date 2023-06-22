@@ -91,6 +91,7 @@ if __name__=='__main__':
     parser.add_argument('--init_type', type=str, default='xavier', help='network initialization [normal|xavier|kaiming|orthogonal]')
     parser.add_argument('--init_variance', type=float, default=0.02, help='variance of the initialization distribution')
     parser.add_argument('--hr_coor', choices=('cosine', 'None','siren'), default='cosine')
+    parser.add_argument('--deep_supervision', action='store_true')
 
     parser.add_argument('--nef', type=int, default=16, help='# of encoder filters in the first conv layer')
 
@@ -112,10 +113,15 @@ if __name__=='__main__':
     if not os.path.isdir(seg_dir):
         os.mkdir(seg_dir)
     #data_dir = '/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/004_rawdata/train_data'
-    data_dir = '/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/004_rawdata/valid_data'
+    #data_dir = '/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/004_rawdata/valid_data'
+    #data_dir = '/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/009_brats18/valid_data'
+    #data_dir = '/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/009_brats18/valid_data_synt1ce_inr'
+    #data_dir = '/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/009_brats18/valid_data_synt1ce_pix2pix'
+    #data_dir = '/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/009_brats18/valid_data_synt1ce_resvit'
+    data_dir = '/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/009_brats18/valid_data_synt1ce_pGAN'
     device = torch.device('cpu' if opt.gpu_ids == -1 else 'cuda')
-    #patch_size = (128,160)
-    patch_size = (160,192)
+    patch_size = (128,160)
+    #patch_size = (160,192)
     model = UnetModel(opt, device=device)
     model.eval()
 

@@ -8,12 +8,13 @@
     }, 
 
     "dataset": {
-        "dataset_dir": "/exports/lkeb-hpc/ychen/01_data/03_preprocessed/03_vssyn/03_preprocessednew/1-1minmax",
+        "dataset_dir": "/exports/lkeb-hpc/ychen/01_data/03_preprocessed/03_vssyn/02_preprocessed/",
         "img_channels": 1,
-        "img_height": 448,
-        "img_width": 448,
-        "input_modalities": ["t2"],
-        "output_modality": "t1ce",
+        "img_height": 320,
+        "img_width": 320,
+        "modal_dict": ["t1ce","t2","seg"],
+        "input_modalities": ["t1ce", "t2"],
+        "output_modality": ["t1ce"],
         "classes": 3
     },
 

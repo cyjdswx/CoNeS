@@ -8,7 +8,6 @@ import torch
 import models.networks as networks
 from models.networks.generator import ASAPNetsGenerator, ASAPFPNGenerator, ASAPFPNGeneratorV2, ASAPfunctaGeneratorV2, ASAPfunctaGeneratorV3
 #from models.networks.generator_cat import CatGenerator, ConcatsirenGenerator,ConcatGenerator_fpn, ConcatGenerator_fpn2, ConcatGenerator_fpn_multi
-from models.networks.generator_vit import TransGenerator, TransGenerator_onemlp, TransGeneratorV2, TransGeneratorV3, TransGeneratorV4, AttGenerator_fpn
 from models.networks.sirengenerator import Siren
 import util.util as util
 from scipy.ndimage.morphology import distance_transform_edt as DistTransform
@@ -55,8 +54,6 @@ class Pix2PixModel(torch.nn.Module):
             return fake_image, coords
 
         input_semantics, real_image = self.preprocess_input(data)
-        #print('input_semantics', input_semantics.shape)
-        #print('real_image', real_image.shape)
         if mode == 'generator':
             g_loss, generated = self.compute_generator_loss(
                 input_semantics, real_image, use_gan)
@@ -88,8 +85,7 @@ class Pix2PixModel(torch.nn.Module):
         else:
             G_lr, D_lr = opt.lr / 2, opt.lr * 2
         
-        optimizer_G = torch.optim.Adam(G_params, lr=G_lr, betas=(beta1, beta2), weight_decay=1e-4)
-        #optimizer_G = torch.optim.Adam(G_params, lr=G_lr, betas=(beta1, beta2))
+        optimizer_G = torch.optim.Adam(G_params, lr=G_lr, betas=(beta1, beta2), weight_decay=3e-5)
 
         if D_params is not None:
             optimizer_D = torch.optim.Adam(D_params, lr=D_lr, betas=(beta1, beta2))
@@ -107,13 +103,9 @@ class Pix2PixModel(torch.nn.Module):
     ############################################################################
 
     def initialize_networks(self, opt, img_size):
-        #netG = networks.define_G(opt)
-        #netG= ASAPFPNGenerator(opt)
-        #netG= ASAPFPNGeneratorV2(opt)
-        netG= ASAPfunctaGeneratorV2(opt)
-        #netG= ASAPfunctaGeneratorV3(opt)
+        #netG= ASAPfunctaGeneratorV2(opt)
+        netG= ASAPfunctaGeneratorV3(opt)
         netG.cuda()
-        netG.init_weights(opt.init_type, opt.init_variance)
         netG.print_network()
         print(netG)
         netD = networks.define_D(opt) if opt.isTrain and opt.use_gan else None
@@ -135,32 +127,20 @@ class Pix2PixModel(torch.nn.Module):
         #    data['label'] = data['label'].long()
         if self.use_gpu():
             data['label'] = data['label'].cuda()
-            data['seg'] = data['seg'].cuda()
+            #data['seg'] = data['seg'].cuda()
             data['image'] = data['image'].cuda()
         
         # create one-hot label map
         input_semantics = data['label']
-        '''
-        if self.opt.no_one_hot:
-            input_semantics = data['label']
-        else:
-            label_map = data['label']
-            bs, _, h, w = label_map.size()
-            nc = self.opt.label_nc + 1 if self.opt.contain_dontcare_label \
-                else self.opt.label_nc
-            #input_label = torch.tensor(np.zeros((bs,nc,h,w)))
-            #input_label = input_label.to(device=self.device, dtype=torch.float32)
-            input_label = self.FloatTensor(bs, nc, h, w).zero_()
-            input_semantics = input_label.scatter_(1, label_map, 1.0)
-        '''
         return input_semantics, data['image']
 
     def compute_generator_loss(self, input_semantics, real_image, use_gan):
         G_losses = {}
         fake_image, lr_features, KLD_loss = self.generate_fake(
             input_semantics, real_image)
-        #if self.opt.use_vae:
-        #    G_losses['KLD'] = KLD_loss
+        
+        if self.opt.L1_loss:
+            G_losses['L1'] = self.criterionL1(fake_image, real_image) 
     
         if use_gan:
             pred_fake, pred_real = self.discriminate(input_semantics, fake_image, real_image)
@@ -170,8 +150,6 @@ class Pix2PixModel(torch.nn.Module):
 
             if not self.opt.no_ganFeat_loss:
                 num_D = len(pred_fake)
-                #GAN_Feat_loss = torch.tensor(np.zeros((1)))
-                #GAN_Feat_loss = GAN_Feat_loss.to(device=self.device, dtype=torch.float32)
                 GAN_Feat_loss = self.FloatTensor(1).fill_(0)
                 for i in range(num_D):  # for each discriminator
                     # last output is the final prediction, so we exclude it
@@ -179,31 +157,18 @@ class Pix2PixModel(torch.nn.Module):
                     for j in range(num_intermediate_outputs):  # for each layer output
                         unweighted_loss = self.criterionFeat(
                             pred_fake[i][j], pred_real[i][j].detach())
-                        GAN_Feat_loss += unweighted_loss * self.opt.lambda_feat / num_D
+                        GAN_Feat_loss += unweighted_loss / num_D
                 G_losses['GAN_Feat'] = GAN_Feat_loss
 
         if not self.opt.no_vgg_loss:
-            G_losses['VGG'] = self.criterionVGG(fake_image, real_image) \
-                * self.opt.lambda_vgg
+            G_losses['VGG'] = self.criterionVGG(fake_image, real_image) 
 
         if self.opt.MSE_loss:
-            G_losses['MSE'] = self.criterionMSE(fake_image, real_image) \
-                * self.opt.lambda_MSE
-        if self.opt.L1_loss:
-            G_losses['L1'] = self.criterionL1(fake_image, real_image) \
-                * self.opt.lambda_L1
-        '''
-        if self.opt.use_weight_decay:
-            print(lr_features.shape)
-            lr_features_l2 = lr_features.norm(p=2)
-            print('l2',lr_features_l2)
-            device = lr_features_l2.device
-            zero = torch.zeros(lr_features_l2.shape).to(device)
-            G_losses['WD'] = self.WDLoss(lr_features_l2, zero) \
-                * self.opt.lambda_WD
-        '''
+            G_losses['MSE'] = self.criterionMSE(fake_image, real_image) 
+        
         if self.opt.latent_code_regularization:
-            G_losses['latent_loss'] = torch.mean(lr_features ** 2) * 10
+            G_losses['latent_loss'] = torch.mean(lr_features ** 2) 
+        
         return G_losses, fake_image
 
     def compute_discriminator_loss(self, input_semantics, real_image):

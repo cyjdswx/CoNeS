@@ -6,6 +6,7 @@ Licensed under the CC BY-NC-SA 4.0 license (https://creativecommons.org/licenses
 from torch.optim.lr_scheduler import LambdaLR
 from models.networks.sync_batchnorm import DataParallelWithCallback
 from models.pix2pix_model import Pix2PixModel
+from torch.cuda.amp import GradScaler
 import torch
 from tqdm import tqdm
 import os,sys
@@ -29,6 +30,7 @@ class Pix2PixTrainer():
     def __init__(self, opt, img_size):
         self.opt = opt
         device = torch.device('cpu' if self.opt.gpu_ids == -1 else 'cuda')
+        self.scaler = GradScaler()
         if opt.L1_loss:
             self.rec_loss = 'L1'
         elif opt.MSE_loss:
@@ -51,57 +53,34 @@ class Pix2PixTrainer():
         self.optimizer_G.zero_grad()
         g_losses, generated = self.pix2pix_model(data, use_gan, mode='generator')
         print(g_losses)
-        g_loss = sum(g_losses.values()).mean()
-        g_loss.backward()
-        self.optimizer_G.step()
-        self.g_losses = g_losses
-        self.generated = generated
+        g_loss = self.opt.lambda_L1 * g_losses['L1'] + g_losses['GAN'] + self.opt.lambda_feat * g_losses['GAN_Feat'] + \
+                self.opt.lambda_ll * g_losses['latent_loss']
+        
+        self.scaler.scale(g_loss).backward()
+        self.scaler.step(self.optimizer_G)
+        self.scaler.update()
+        return g_losses, generated
 
     def run_discriminator_one_step(self, data) -> None:
         if self.optimizer_D is not None:
             self.optimizer_D.zero_grad()
             d_losses = self.pix2pix_model(data, True, mode='discriminator')
-            d_loss = sum(d_losses.values()).mean()
-            d_loss.backward()
-            self.optimizer_D.step()
-            self.d_losses = d_losses
-
-    def get_latest_losses(self):
-        if self.opt.use_gan:
-            return {**self.g_losses, **self.d_losses}
-        else:
-            return {**self.g_losses}
+            d_loss = d_losses['D_Fake'] + d_losses['D_real']
+            self.scaler.scale(d_loss).backward()
+            self.scaler.step(self.optimizer_D)
+            self.scaler.update()
     
     def run_evalutation_during_training(self, dataloader):
         num_val = len(dataloader)
         self.pix2pix_model.eval()
-        val_gan_loss = 0
-        val_ganfeat_loss = 0
-        val_l1_loss = 0
-        generated = None
-        for batch in tqdm(dataloader,total=num_val,desc='Validation round', unit='batch'):
-            with torch.no_grad():
+        val_rec_loss = 0
+        with torch.no_grad():
+            for i, batch in enumerate(dataloader):
                 g_losses, generated = self.pix2pix_model(batch, self.opt.use_gan, mode='generator')
-                #val_gan_loss += g_losses['GAN']
-                #val_ganfeat_loss += g_losses['GAN_Feat']
-                #val_l1_loss += g_losses['L1']
-                val_l1_loss += g_losses[self.rec_loss]
+                val_rec_loss += g_losses[self.rec_loss]
 
         self.pix2pix_model.train()
-        
-        return val_l1_loss / num_val, generated
-        
-
-    def get_latest_generated(self):
-        return self.generated
-
-    def get_latest_lr(self):
-        lr_G = self.lr_scheduler_G.get_last_lr()[0]
-        if self.lr_scheduler_D is not None:
-            lr_D = self.lr_scheduler_D.get_last_lr()[0]
-        else:
-            lr_D = 0
-        return lr_G, lr_D 
+        return val_rec_loss / num_val
 
     def save(self, epoch):
         self.pix2pix_model.save(epoch)
@@ -114,25 +93,3 @@ class Pix2PixTrainer():
     def update_learning_rate(self, epoch):
         self.lr_scheduler_D.step()
         self.lr_scheduler_G.step()
-        '''
-        if epoch > self.opt.niter:
-            lrd = self.opt.lr / self.opt.niter_decay
-            new_lr = self.old_lr - lrd
-        else:
-            new_lr = self.old_lr
-
-        if new_lr != self.old_lr:
-            if self.opt.no_TTUR:
-                new_lr_G = new_lr
-                new_lr_D = new_lr
-            else:
-                new_lr_G = new_lr / 2
-                new_lr_D = new_lr * 2
-            if self.optimizer_D is not None:
-                for param_group in self.optimizer_D.param_groups:
-                    param_group['lr'] = new_lr_D
-            for param_group in self.optimizer_G.param_groups:
-                param_group['lr'] = new_lr_G
-            print('update learning rate: %f -> %f' % (self.old_lr, new_lr))
-            self.old_lr = new_lr
-        '''

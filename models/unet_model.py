@@ -5,7 +5,7 @@ Licensed under the CC BY-NC-SA 4.0 license (https://creativecommons.org/licenses
 
 import torch
 import models.networks as networks
-from models.networks.segmentation import ASAPNetsSeg, ASAPNetsMultiSeg, InitWeights_He
+from models.networks.segmentation import InitWeights_He, UNet
 from models.networks.segmentation import SegNet
 import util.util as util
 import torch.nn.functional as F
@@ -35,64 +35,69 @@ class UnetModel(torch.nn.Module):
             '''
             self.criterionseg = torch.nn.CrossEntropyLoss()
             self.loss = DC_and_CE_loss({'batch_dice':True,'smooth':1e-5, 'do_bg':False},{})
-            # we need to know the number of outputs of the network
-            net_numpool = 5
+            if opt.deep_supervision:
+                # we need to know the number of outputs of the network
+                net_numpool = 5
 
-            # we give each output a weight which decreases exponentially (division by 2) as the resolution decreases
-            # this gives higher resolution outputs more weight in the loss
-            weights = np.array([1 / (2 ** i) for i in range(net_numpool)])
+                # we give each output a weight which decreases exponentially (division by 2) as the resolution decreases
+                # this gives higher resolution outputs more weight in the loss
+                weights = np.array([1 / (2 ** i) for i in range(net_numpool)])
 
-            # we don't use the lowest 2 outputs. Normalize weights so that they sum to 1
-            mask = np.array([True] + [True if i < net_numpool - 1 else False for i in range(1, net_numpool)])
-            weights[~mask] = 0
-            weights = weights / weights.sum()
-            self.ds_loss_weights = weights
-            # now wrap the loss
-            self.segloss = MultipleOutputLoss2(self.loss, self.ds_loss_weights)
+                # we don't use the lowest 2 outputs. Normalize weights so that they sum to 1
+                mask = np.array([True] + [True if i < net_numpool - 1 else False for i in range(1, net_numpool)])
+                weights[~mask] = 0
+                weights = weights / weights.sum()
+                self.ds_loss_weights = weights
+                # now wrap the loss
+                self.segloss = MultipleOutputLoss2(self.loss, self.ds_loss_weights)
+            else:
+                self.segloss = self.loss
+        self.deep_supervision = opt.deep_supervision
 
-    # Entry point for all calls involving forward pass
-    # of deep networks. We used this approach since DataParallel module
-    # can't parallelize custom functions, we branch to different
-    # routines based on |mode|.
     def forward(self, data, mode):
         if mode == 'inference':
             with torch.no_grad():
                 seg = self.generate_seg(data)
             return seg
         else:
-            input_semantics, real_image, mask = self.preprocess_input(data)
+            data['label'] = data['label'].cuda()
+            if self.deep_supervision:
+                for i in range(len(data['seg'])):
+                    data['seg'][i] = data['seg'][i].cuda()
+            else:
+                data['seg'] = data['seg'].cuda()
+            data['image'] = data['image'].cuda()
         
         if mode == 'generator':
             g_loss, generated, seg = self.compute_generator_loss(
-                input_semantics, real_image, mask)
+                data['label'], data['image'], data['seg'])
             return g_loss, generated, seg
         elif mode == 'segmentation':
             g_loss, seg = self.compute_segmentation_loss(
-                input_semantics, mask)
+                data['label'], data['seg'])
             return g_loss, seg
         elif mode == 'discriminator':
             d_loss = self.compute_discriminator_loss(
-                input_semantics, real_image)
+                data['label'], data['image'])
             return d_loss
         else:
             raise ValueError("|mode| is invalid")
 
     def generate_seg(self, input):
         seg = self.netG(input)
-        return seg[0]
+        if self.deep_supervision:
+            return seg[0]
+        else:
+            return seg
 
     def create_optimizers(self, opt):
         G_params = list(self.netG.parameters())
 
         beta1, beta2 = opt.beta1, opt.beta2
-        '''
-        if opt.no_TTUR:
-            G_lr, D_lr = opt.lr, opt.lr
-        else:
-            G_lr, D_lr = opt.lr / 2, opt.lr * 2
-        '''
         #optimizer_G = torch.optim.Adam(G_params, lr=G_lr, betas=(beta1, beta2))
-        optimizer_G = torch.optim.Adam(G_params, lr=opt.lr, betas=(beta1, beta2), weight_decay=1e-4)
+        #optimizer_G = torch.optim.Adam(G_params, lr=opt.lr, betas=(beta1, beta2), weight_decay=3e-5)
+        optimizer_G = torch.optim.SGD(G_params, opt.lr, weight_decay=3e-5,
+                                    momentum=0.99, nesterov=True)
         '''
         if D_params is not None:
             #optimizer_D = torch.optim.Adam(D_params, lr=D_lr, betas=(beta1, beta2), weight_decay=1e-4)
@@ -111,13 +116,14 @@ class UnetModel(torch.nn.Module):
     ############################################################################
 
     def initialize_networks(self, opt):
-        #netG = ASAPNetsMultiSeg(opt,n_classes=4)
+        #netG = UNet(n_channels=4, n_classes=4, bilinear=True)
+        #netG.apply(InitWeights_He(1e-2))
         norm_op_kwargs = {'eps':1e-05, 'affine':True}
         dropout_op_kwargs = {'p':0, 'inplace':True}
         net_nonline_kwargs = {'negative_slope': 0.01, 'inplace': True}
         num_pool_op_kernel_size = [[2,2],[2,2],[2,2],[2,2],[2,2]]
         net_conv_kernel_size = [[3,3],[3,3],[3,3],[3,3],[3,3],[3,3]]
-        netG = SegNet(input_channels=3, base_num_features=32, num_classes=4, num_pool=5,num_conv_per_stage=2,\
+        netG = SegNet(input_channels=opt.label_nc, base_num_features=32, num_classes=4, num_pool=5,num_conv_per_stage=2,\
                 feat_map_mul_on_downscale=2,conv_op=torch.nn.Conv2d, norm_op=torch.nn.InstanceNorm2d, norm_op_kwargs=norm_op_kwargs,\
                 dropout_op=torch.nn.Dropout2d,dropout_op_kwargs=dropout_op_kwargs, nonlin=torch.nn.LeakyReLU,\
                 nonlin_kwargs=net_nonline_kwargs,deep_supervision=True, dropout_in_localization=False,final_nonlin=lambda x:x,\
@@ -126,7 +132,6 @@ class UnetModel(torch.nn.Module):
         if len(opt.gpu_ids) > 0:
             assert(torch.cuda.is_available())
             netG.cuda()
-        #netG.init_weights(opt.init_type, opt.init_variance)
         print(netG)
         if not opt.isTrain or opt.continue_train:
             netG = util.load_network(netG, 'G', opt.which_epoch, opt)
@@ -142,8 +147,9 @@ class UnetModel(torch.nn.Module):
         #if not(self.opt.no_one_hot):
         if self.use_gpu():
             data['label'] = data['label'].cuda()
-            for i in range(len(data['seg'])):
-                data['seg'][i] = data['seg'][i].cuda()
+            #for i in range(len(data['seg'])):
+            #    data['seg'][i] = data['seg'][i].cuda()
+            data['seg'] = data['seg'].cuda()
             data['image'] = data['image'].cuda()
         input_semantics = data['label']
         #data['seg'] = data['seg'].to(dtype=torch.long).squeeze(dim=1)

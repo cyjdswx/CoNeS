@@ -2,17 +2,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from models.networks.base_network import BaseNetwork
-from models.networks.normalization import get_nonspade_norm_layer
 from models.networks.architecture import ASAPNetsBlock as ASAPNetsBlock
-from models.networks.generator import ASAPNetsLRStream,ASAPNetsHRStream, _get_coords, ASAPfunctaHRStream, ASAPfunctaHRStreamfulres, Encoder_fpn3, Bottleneck_in, Bottleneckdropout, Encoder_fpn4
-from models.networks.architecture import MySeparableBilinearDownsample as BilinearDownsample
-import torch.nn.utils.spectral_norm as spectral_norm
-import torch as th
+from models.networks.generator import InitWeights_me, _get_coords, ASAPfunctaHRStream, ASAPfunctaHRStreamfulres, Encoder_fpn3, Bottleneck_in, Bottleneckdropout, Encoder_fpn4
 from einops import rearrange
-from math import pi
-from math import log2
 from copy import deepcopy
-import time
 import numpy as np
 
 from torch.nn import init
@@ -70,7 +63,7 @@ class ASAPNetsMultiSeg_nnunet_feat(BaseNetwork):
         
         num_params = self.highres_stream.num_params
         self.latlayers = nn.Conv2d(256, num_params, kernel_size=1, stride=1,padding=0)
-        self.seg_stream = SegNet(input_channels=4+256, base_num_features=32, num_classes=4, num_pool=5,num_conv_per_stage=2,\
+        self.seg_stream = SegNet(input_channels=self.num_inputs + num_params, base_num_features=32, num_classes=self.n_classes, num_pool=5,num_conv_per_stage=2,\
                 feat_map_mul_on_downscale=2,conv_op=torch.nn.Conv2d, norm_op=torch.nn.InstanceNorm2d, norm_op_kwargs=norm_op_kwargs,\
                 dropout_op=torch.nn.Dropout2d,dropout_op_kwargs=dropout_op_kwargs, nonlin=torch.nn.LeakyReLU,\
                 nonlin_kwargs=net_nonline_kwargs,deep_supervision=True, dropout_in_localization=False,final_nonlin=lambda x:x,\
@@ -82,6 +75,120 @@ class ASAPNetsMultiSeg_nnunet_feat(BaseNetwork):
         self.lowres_stream.apply(self.init)
         self.latlayers.apply(self.init)
         self.highres_stream.apply(self.init)
+
+    def use_gpu(self):
+        return len(self.gpu_ids) > 0
+
+    def forward(self, highres):
+        features = self.lowres_stream(highres)
+        features = self.latlayers(features)
+        output = self.highres_stream(highres, features)
+        seg_input = torch.cat([highres, features], dim=1)
+        seg = self.seg_stream(seg_input)
+        return output, seg, features#, lowres
+
+class Synseg_vanillaunet(BaseNetwork):
+    def __init__(self, opt, n_classes, dropout=False):
+        super(Synseg_vanillaunet, self).__init__()
+        self.num_inputs = opt.label_nc
+        self.num_outputs = opt.output_nc
+        self.n_classes = n_classes
+        self.learned_ds_factor = opt.learned_ds_factor 
+        self.gpu_ids = opt.gpu_ids
+        
+        self.block = Bottleneck_in
+        self.lowres_stream = Encoder_fpn4(num_in=self.num_inputs, block=self.block, num_blocks=[2,4,23,3])
+        self.highres_stream = ASAPfunctaHRStreamfulres( num_inputs=self.num_inputs,
+                                               num_outputs=opt.output_nc, width=opt.hr_width,
+                                               depth=opt.hr_depth, coordinates=opt.hr_coor)
+        
+        num_params = self.highres_stream.num_params
+        self.latlayers = nn.Conv2d(256, num_params, kernel_size=1, stride=1,padding=0)
+        
+        self.seg_stream = UNet(n_channels=self.num_inputs + self.num_outputs, n_classes=n_classes, bilinear=True)
+        
+        self.init = InitWeights_me(opt.init_type, opt.init_variance)
+        self.lowres_stream.apply(self.init)
+        self.latlayers.apply(self.init)
+        self.highres_stream.apply(self.init)
+        #self.seg_stream.apply(self.init)
+        self.seg_stream.apply(InitWeights_He(1e-2))
+
+    def use_gpu(self):
+        return len(self.gpu_ids) > 0
+
+    def forward(self, highres):
+        features = self.lowres_stream(highres)
+        features = self.latlayers(features)
+        output = self.highres_stream(highres, features)
+        seg_input = torch.cat([highres, output], dim=1)
+        seg = self.seg_stream(seg_input)
+        return output, seg, features
+
+class Synseg_vanillaunet_feat(BaseNetwork):
+    def __init__(self, opt, n_classes, dropout=False):
+        super(Synseg_vanillaunet_feat, self).__init__()
+        self.num_inputs = opt.label_nc
+        self.num_outputs = opt.output_nc
+        self.n_classes = n_classes
+        self.learned_ds_factor = opt.learned_ds_factor 
+        self.gpu_ids = opt.gpu_ids
+        
+        self.block = Bottleneck_in
+        self.lowres_stream = Encoder_fpn4(num_in=self.num_inputs, block=self.block, num_blocks=[2,4,23,3])
+        self.highres_stream = ASAPfunctaHRStreamfulres( num_inputs=self.num_inputs,
+                                               num_outputs=opt.output_nc, width=opt.hr_width,
+                                               depth=opt.hr_depth, coordinates=opt.hr_coor)
+        
+        num_params = self.highres_stream.num_params
+        self.latlayers = nn.Conv2d(256, num_params, kernel_size=1, stride=1,padding=0)
+        
+        self.seg_stream = UNet(n_channels=self.num_inputs + num_params, n_classes=n_classes, bilinear=True)
+        
+        self.init = InitWeights_me(opt.init_type, opt.init_variance)
+        self.lowres_stream.apply(self.init)
+        self.latlayers.apply(self.init)
+        self.highres_stream.apply(self.init)
+        #self.seg_stream.apply(self.init)
+        self.seg_stream.apply(InitWeights_He(1e-2))
+
+    def use_gpu(self):
+        return len(self.gpu_ids) > 0
+
+    def forward(self, highres):
+        features = self.lowres_stream(highres)
+        features = self.latlayers(features)
+        output = self.highres_stream(highres, features)
+        seg_input = torch.cat([highres, features], dim=1)
+        seg = self.seg_stream(seg_input)
+        return output, seg, features
+
+class ASAPNetsMultiSeg_vanillaunet_feat(BaseNetwork):
+    def __init__(self, opt, n_classes, dropout=False):
+        super(ASAPNetsMultiSeg_vanillaunet_feat, self).__init__()
+        self.num_inputs = opt.label_nc
+        self.num_outputs = opt.output_nc
+        self.n_classes = n_classes
+        self.learned_ds_factor = opt.learned_ds_factor #(S2 in sec. 3.2)
+        self.gpu_ids = opt.gpu_ids
+ 
+
+        self.block = Bottleneck_in
+        self.lowres_stream = Encoder_fpn4(num_in=self.num_inputs, block=self.block, num_blocks=[2,4,23,3])
+        self.highres_stream = ASAPfunctaHRStreamfulres(num_inputs=self.num_inputs,
+                                               num_outputs=opt.output_nc, width=opt.hr_width,
+                                               depth=opt.hr_depth, coordinates=opt.hr_coor)
+        
+        num_params = self.highres_stream.num_params
+        self.latlayers = nn.Conv2d(256, num_params, kernel_size=1, stride=1,padding=0)
+        
+        self.seg_stream = UNet(n_channels=self.num_inputs + num_params, n_classes=n_classes, bilinear=True)
+        
+        self.init = InitWeights_me(opt.init_type, opt.init_variance)
+        self.lowres_stream.apply(self.init)
+        self.latlayers.apply(self.init)
+        self.highres_stream.apply(self.init)
+        self.seg_stream.apply(InitWeights_He(1e-2))
 
     def use_gpu(self):
         return len(self.gpu_ids) > 0
@@ -123,7 +230,7 @@ class ASAPNetsMultiSeg_nnunetonly_feat(BaseNetwork):
         
         num_params = self.highres_stream.num_params
         self.latlayers = nn.Conv2d(256, num_params, kernel_size=1, stride=1,padding=0)
-        self.seg_stream = SegNet(input_channels=4+256, base_num_features=32, num_classes=4, num_pool=5,num_conv_per_stage=2,\
+        self.seg_stream = SegNet(input_channels=4+256, base_num_features=32, num_classes=self.n_classes, num_pool=5,num_conv_per_stage=2,\
                 feat_map_mul_on_downscale=2,conv_op=torch.nn.Conv2d, norm_op=torch.nn.InstanceNorm2d, norm_op_kwargs=norm_op_kwargs,\
                 dropout_op=torch.nn.Dropout2d,dropout_op_kwargs=dropout_op_kwargs, nonlin=torch.nn.LeakyReLU,\
                 nonlin_kwargs=net_nonline_kwargs,deep_supervision=True, dropout_in_localization=False,final_nonlin=lambda x:x,\
@@ -278,214 +385,6 @@ class ASAPNetsMultiSeg(BaseNetwork):
         seg = self.seg_stream(seg_input)
         return output, seg, features#, lowres
 
-class ASAPNetsSeg(BaseNetwork):
-    @staticmethod
-    def modify_commandline_options(parser, is_train):
-        parser.set_defaults(norm_G='instanceaffine')
-        parser.set_defaults(no_instance_dist=True)
-        #parser.set_defaults(hr_coor="cosine")
-        return parser
-
-    def __init__(self, opt, n_classes, hr_stream=None, lr_stream=None, fast=False):
-        super(ASAPNetsSeg, self).__init__()
-        if lr_stream is None or hr_stream is None:
-            lr_stream = dict()
-            hr_stream = dict()
-        self.num_inputs = opt.label_nc
-        self.num_outputs = opt.output_nc
-        self.n_classes = n_classes
-        self.learned_ds_factor = opt.learned_ds_factor #(S2 in sec. 3.2)
-        self.gpu_ids = opt.gpu_ids
-        # calculates the total downsampling factor in order to get the final low-res grid of parameters (S=S1xS2 in sec. 3.2)
-        self.downsampling = pow(2, opt.ds_factor)
-        self.lowres_stream = Encoder_fpn3(num_in=self.num_inputs, block=Bottleneck_in, num_blocks=[2,4,23,3])
-        
-        self.highres_stream = ASAPNetsHRSegStream(self.downsampling, num_inputs=self.num_inputs,
-                                               num_outputs=self.num_outputs, n_classes=self.n_classes, width=opt.hr_width,
-                                               depth=opt.hr_depth, coordinates=opt.hr_coor,
-                                               **hr_stream)
-        num_params = self.highres_stream.num_params
-        self.latlayers = nn.Conv2d(256, num_params, kernel_size=1, stride=1,padding=0)
-
-    def use_gpu(self):
-        return len(self.gpu_ids) > 0
-
-    def forward(self, highres):
-        features = self.lowres_stream(highres)
-        features = self.latlayers(features)
-        output, seg = self.highres_stream(highres, features)
-        return output, seg, features#, lowres
-
-class ASAPNetsSegGenerator_v2(BaseNetwork):
-    @staticmethod
-    def modify_commandline_options(parser, is_train):
-        parser.set_defaults(norm_G='instanceaffine')
-        parser.set_defaults(no_instance_dist=True)
-        return parser
-
-    def __init__(self, opt, n_classes, hr_stream=None, lr_stream=None, fast=False):
-        super(ASAPNetsSegGenerator_v2, self).__init__()
-        if lr_stream is None or hr_stream is None:
-            lr_stream = dict()
-            hr_stream = dict()
-        self.num_inputs = opt.label_nc + (1 if opt.contain_dontcare_label else 0) + (0 if (opt.no_instance_edge & opt.no_instance_dist) else 1)
-        self.num_outputs = opt.output_nc
-        self.n_classes = n_classes
-        self.lr_instance = opt.lr_instance
-        self.learned_ds_factor = opt.learned_ds_factor #(S2 in sec. 3.2)
-        self.gpu_ids = opt.gpu_ids
-        img_size = (128,160)
-        # calculates the total downsampling factor in order to get the final low-res grid of parameters (S=S1xS2 in sec. 3.2)
-        #self.downsampling = opt.crop_size // (16 * opt.aspect_ratio)
-        self.downsampling = min(img_size) // opt.lowest_ds_factor
-        print('down', self.downsampling)
-
-        self.highres_stream = ASAPNetsHRStream(self.downsampling, num_inputs=self.num_inputs,
-                                               num_outputs=self.num_outputs, width=opt.hr_width,
-                                               depth=opt.hr_depth, coordinates=opt.hr_coor,
-                                               no_one_hot=opt.no_one_hot, lr_instance=opt.lr_instance,
-                                               **hr_stream)
-
-        num_params = self.highres_stream.num_params
-        num_inputs_lr = self.highres_stream.num_inputs + (1 if opt.lr_instance else 0)
-        norm_layer = get_nonspade_norm_layer(opt, opt.norm_G)
-        self.lowres_stream = ASAPNetsLRStream(num_inputs_lr, num_params, norm_layer, width=opt.lr_width,
-                                              max_width=opt.lr_max_width, depth=opt.lr_depth,
-                                              learned_ds_factor=opt.learned_ds_factor,
-                                              reflection_pad=opt.reflection_pad, **lr_stream)
-        self.seg_stream = UNet(n_channels=self.num_inputs + self.num_outputs, n_classes=n_classes, bilinear=True)
-    
-    def use_gpu(self):
-        return len(self.gpu_ids) > 0
-
-    def get_lowres(self, im):
-        """Creates a lowres version of the input."""
-        device = self.use_gpu()
-        if(self.learned_ds_factor != self.downsampling):
-            myds = BilinearDownsample(int(self.downsampling//self.learned_ds_factor), self.num_inputs,device)
-            return myds(im)
-        else:
-            return im
-
-    def forward(self, highres):
-        lowres = self.get_lowres(highres)
-        lr_features = self.lowres_stream(lowres)
-        output  = self.highres_stream(highres, lr_features)
-        seg_input = torch.cat([highres,output], dim=1)
-        seg = self.seg_stream(seg_input)
-        return output, seg, lr_features
-
-class ASAPNetsHRSegStream(th.nn.Module):
-    """Addaptive pixel-wise MLPs"""
-    def __init__(self, downsampling,
-                 num_inputs=13, num_outputs=3,n_classes = 4, width=64, depth=5, coordinates="cosine"):
-        super(ASAPNetsHRSegStream, self).__init__()
-
-        self.downsampling = downsampling
-        self.num_inputs = num_inputs
-        self.num_outputs = num_outputs 
-        self.n_classes = n_classes
-        self.width = width
-        self.depth = depth
-        self.coordinates = coordinates
-        self.xy_coords = None
-        self.channels = []
-        self._set_channels()
-
-        self.num_params = 0
-        self.splits = {}
-        self._set_num_params()
-        self.net = nn.ModuleList()
-        for i in range(len(self.channels) - 1):
-            self.net.append(nn.Linear(self.channels[i], self.channels[i+1], bias=True))
-
-    @property  # for backward compatibility
-    def ds(self):
-        return self.downsampling
-
-
-    def _set_channels(self):
-        """Compute and store the hr-stream layer dimensions."""
-        in_ch = self.num_inputs
-        if self.coordinates == "cosine":
-            in_ch += int(4*log2(self.downsampling))
-        #elif self.coordinates == "siren":
-        #    in_ch += 2
-        ### globle coord test
-        #if self.coordinates == "cosine":
-        #    in_ch += int(4*(log2(8)+1))
-        self.channels = [in_ch]
-
-        for _ in range(self.depth - 1):  # intermediate layer -> cste size
-            self.channels.append(self.width)
-        # output layer
-        self.channels.append(self.num_outputs+ self.n_classes)
-    
-    def _set_num_params(self):
-        nparams = 0
-        self.splits = {
-            "biases": [],
-            "weights": [],
-        }
-
-        # go over input/output channels for each layer
-        idx = 0
-        for layer, nci in enumerate(self.channels[:-1]):
-            nco = self.channels[layer + 1]
-            nparams += nco  # FC biases
-            self.splits["biases"].append((idx, idx + nco))
-            idx += nco
-
-            nparams += nci * nco  # FC weights
-            self.splits["weights"].append((idx, idx + nco * nci))
-            idx += nco * nci
-
-        self.num_params = nparams
-
-    def _get_weight_indices(self, idx):
-        return self.splits["weights"][idx]
-
-    def _get_bias_indices(self, idx):
-        return self.splits["biases"][idx]
-
-    def forward(self, highres, lr_params):
-        assert lr_params.shape[1] == self.num_params, "incorrect input params"
-
-        # Fetch sizes
-        bs, _, h, w = highres.shape
-        bs, _, h_lr, w_lr = lr_params.shape
-        
-        # Spatial encoding
-        if not(self.coordinates is None):
-            if self.xy_coords is None:
-                self.xy_coords = _get_coords(bs, h, w, highres.device, self.ds, self.coordinates)
-                #self.xy_coords = _get_coords_global(bs, h, w, highres.device, 8, '01')
-            highres = th.cat([highres, self.xy_coords], 1)
-        
-        out = rearrange(highres,'b c h w -> b h w c')
-        num_layers = len(self.channels) - 1
-        for idx, nci in enumerate(self.channels[:-1]):
-            nco = self.channels[idx + 1]
-
-            # Select params in lowres buffer
-            bstart, bstop = self._get_bias_indices(idx)
-            b_ = lr_params[:, bstart:bstop]
-            out = self.net[idx](out)
-            b_ = b_.permute(0, 2, 3, 1)
-            b_ = b_.repeat_interleave(2, dim=1)
-            b_ = b_.repeat_interleave(2, dim=2)
-            out = out + b_
-            # Apply RelU non-linearity in all but the last layer, and tanh in the last
-            if idx < num_layers - 1:
-                out = th.nn.functional.leaky_relu(out, 0.01, inplace=True)
-            else:
-                output, mask = torch.split(out, [self.num_outputs,self.n_classes], dim=3)
-                output = F.tanh(output)
-        
-        output = rearrange(output, 'b h w c-> b c h w')
-        mask = rearrange(mask, 'b h w c -> b c h w')
-        return output, mask
-
 class DoubleConv(nn.Module):
     """(convolution => [BN] => ReLU) * 2"""
 
@@ -543,8 +442,6 @@ class Up(nn.Module):
         x1 = F.pad(x1, [diffX // 2, diffX - diffX // 2,
                         diffY // 2, diffY - diffY // 2])
         # if you have padding issues, see
-        # https://github.com/HaiyongJiang/U-Net-Pytorch-Unstructured-Buggy/commit/0e854509c2cea854e247a9c615f175f76fbb2e3a
-        # https://github.com/xiaopeng-liao/Pytorch-UNet/commit/8ebac70e633bac59fc22bb5195e513d5832fb3bd
         x = torch.cat([x2, x1], dim=1)
         return self.conv(x)
 
@@ -600,36 +497,6 @@ class InitWeights_He(object):
             module.weight = nn.init.kaiming_normal_(module.weight, a=self.neg_slope) 
             if module.bias is not None:
                 module.bias = nn.init.constant_(module.bias, 0) 
-
-    #def init_weights(self, init_type='normal', gain=0.02):
-class InitWeights_me(object):
-    def __init__(self, init_type='normal', gain=0.02,neg_slope=1e-2):
-        self.init_type = init_type
-        self.gain = gain
-        self.neg_slope = neg_slope
-
-    def __call__(self,module):
-        if isinstance(module, nn.BatchNorm2d):
-            nn.init.normal_(module.weight, 1.0, self.gain)
-            if module.bias is not None:
-                nn.init.constant_(module.bias, 0.0)
-        elif isinstance(module, nn.Conv2d) or isinstance(module, nn.ConvTranspose2d) or isinstance(module, nn.Linear):
-            if self.init_type == 'normal':
-                nn.init.normal_(module.weight, 0.0, self.gain)
-            elif self.init_type == 'xavier':
-                nn.init.xavier_normal_(module.weight, self.gain)
-            elif self.init_type == 'xavier_uniform':
-                nn.init.xavier_uniform_(module.weight, self.gain)
-            elif self.init_type == 'kaiming':
-                nn.init.kaiming_normal_(module.weight, a=0, mode='fan_in')
-            elif self.init_type =='orthogonal':
-                nn.init.orthogonal_(module.weight, gain=self.gain)
-            elif self.init_type == 'None':
-                module.reset_parameters()
-            else:
-                raise NotImplementedError('initialization method [%s] is not implemented' % self.init_type)
-            if module.bias is not None:
-                nn.init.constant_(module.bias, 0.0)
 
 class ConvDropoutNormNonlin(nn.Module):
     """

@@ -16,6 +16,35 @@ import numpy as np
 
 from util.util import OrderedDict
 
+class InitWeights_me(object):
+    def __init__(self, init_type='normal', gain=0.02,neg_slope=1e-2):
+        self.init_type = init_type
+        self.gain = gain
+        self.neg_slope = neg_slope
+
+    def __call__(self,module):
+        if isinstance(module, nn.BatchNorm2d):
+            nn.init.normal_(module.weight, 1.0, self.gain)
+            if module.bias is not None:
+                nn.init.constant_(module.bias, 0.0)
+        elif isinstance(module, nn.Conv2d) or isinstance(module, nn.ConvTranspose2d) or isinstance(module, nn.Linear):
+            if self.init_type == 'normal':
+                nn.init.normal_(module.weight, 0.0, self.gain)
+            elif self.init_type == 'xavier':
+                nn.init.xavier_normal_(module.weight, self.gain)
+            elif self.init_type == 'xavier_uniform':
+                nn.init.xavier_uniform_(module.weight, self.gain)
+            elif self.init_type == 'kaiming':
+                nn.init.kaiming_normal_(module.weight, a=0, mode='fan_in')
+            elif self.init_type =='orthogonal':
+                nn.init.orthogonal_(module.weight, gain=self.gain)
+            elif self.init_type == 'None':
+                module.reset_parameters()
+            else:
+                raise NotImplementedError('initialization method [%s] is not implemented' % self.init_type)
+            if module.bias is not None:
+                nn.init.constant_(module.bias, 0.0)
+
 def sine_init(m):
     with torch.no_grad():
         if hasattr(m, 'weight'):
@@ -82,24 +111,13 @@ class ASAPNetsGenerator(BaseNetwork):
         return output, features#, lowres
 
 class ASAPfunctaGeneratorV3(BaseNetwork):
-    @staticmethod
-    def modify_commandline_options(parser, is_train):
-        parser.set_defaults(norm_G='instanceaffine')
-        parser.set_defaults(no_instance_dist=True)
-        #parser.set_defaults(hr_coor="cosine")
-        return parser
-
     def __init__(self, opt, img_size=(128,160), hr_stream=None, lr_stream=None, fast=False):
         super(ASAPfunctaGeneratorV3, self).__init__()
         if lr_stream is None or hr_stream is None:
             lr_stream = dict()
             hr_stream = dict()
-        #self.num_inputs = opt.label_nc + (1 if opt.contain_dontcare_label else 0) + (0 if (opt.no_instance_edge & opt.no_instance_dist) else 1)
         self.num_inputs = opt.label_nc
-        self.lr_instance = opt.lr_instance
-        self.learned_ds_factor = opt.learned_ds_factor #(S2 in sec. 3.2)
         self.gpu_ids = opt.gpu_ids
-        # calculates the total downsampling factor in order to get the final low-res grid of parameters (S=S1xS2 in sec. 3.2)
 
         self.highres_stream = ASAPfunctaHRStreamfulres(num_inputs=self.num_inputs,
                                                num_outputs=opt.output_nc, width=opt.hr_width,
@@ -109,6 +127,10 @@ class ASAPfunctaGeneratorV3(BaseNetwork):
         
         self.latlayers = nn.Conv2d(256, num_params, kernel_size=1, stride=1,padding=0)
         self.lowres_stream = Encoder_fpn4(num_in=self.num_inputs, block=Bottleneck_in, num_blocks=[2,4,23,3])
+        self.init = InitWeights_me(opt.init_type, opt.init_variance)
+        self.lowres_stream.apply(self.init)
+        self.latlayers.apply(self.init)
+        self.highres_stream.apply(self.init)
     
     def use_gpu(self):
         return len(self.gpu_ids) > 0
@@ -380,8 +402,6 @@ class ASAPfunctaHRStreamfulres(th.nn.Module):
         for i in range(len(self.channels) - 1):
             #layer_name = 'fc'+str(i)
             self.net.append(nn.Linear(self.channels[i], self.channels[i+1], bias=True))
-        
-        #self.net = nn.Sequential(self.net)
 
     @property  # for backward compatibility
     def ds(self):

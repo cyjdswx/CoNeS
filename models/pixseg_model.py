@@ -6,7 +6,7 @@ Licensed under the CC BY-NC-SA 4.0 license (https://creativecommons.org/licenses
 import torch
 import models.networks as networks
 from models.networks.generator import ASAPfunctaGeneratorV3
-from models.networks.segmentation import InitWeights_He, SegNet, ASAPNetsMultiSeg_nnunet, ASAPNetsMultiSeg_nnunet_feat, ASAPNetsMultiSeg_nnunetonly_feat, ASAPNetsMultiSeg_nnunet_fullres
+from models.networks.segmentation import InitWeights_He, SegNet, ASAPNetsMultiSeg_nnunet_feat, Synseg_vanillaunet, Synseg_vanillaunet_feat
 import util.util as util
 import torch.nn.functional as F
 from scipy.ndimage.morphology import distance_transform_edt as DistTransform
@@ -21,7 +21,7 @@ class PixSegModel(torch.nn.Module):
             else torch.FloatTensor
         self.ByteTensor = torch.cuda.ByteTensor if self.use_gpu() \
             else torch.ByteTensor
-
+        self.deep_supervision = opt.deep_supervision
         self.netG, self.netD = self.initialize_networks(opt)
         #self.netG, self.netS, self.netD = self.initialize_networks_tri()(opt)
 
@@ -39,51 +39,60 @@ class PixSegModel(torch.nn.Module):
             #self.criterionseg = torch.nn.CrossEntropyLoss()
             
             self.loss = DC_and_CE_loss({'batch_dice':True,'smooth':1e-5, 'do_bg':False},{})
-            # we need to know the number of outputs of the network
-            net_numpool = 5
+            if opt.deep_supervision:
+                # we need to know the number of outputs of the network
+                net_numpool = 5
 
-            # we give each output a weight which decreases exponentially (division by 2) as the resolution decreases
-            # this gives higher resolution outputs more weight in the loss
-            weights = np.array([1 / (2 ** i) for i in range(net_numpool)])
+                # we give each output a weight which decreases exponentially (division by 2) as the resolution decreases
+                # this gives higher resolution outputs more weight in the loss
+                weights = np.array([1 / (2 ** i) for i in range(net_numpool)])
 
-            # we don't use the lowest 2 outputs. Normalize weights so that they sum to 1
-            mask = np.array([True] + [True if i < net_numpool - 1 else False for i in range(1, net_numpool)])
-            weights[~mask] = 0
-            weights = weights / weights.sum()
-            self.ds_loss_weights = weights
-            # now wrap the loss
-            self.segloss = MultipleOutputLoss2(self.loss, self.ds_loss_weights)
+                # we don't use the lowest 2 outputs. Normalize weights so that they sum to 1
+                mask = np.array([True] + [True if i < net_numpool - 1 else False for i in range(1, net_numpool)])
+                weights[~mask] = 0
+                weights = weights / weights.sum()
+                self.ds_loss_weights = weights
+                # now wrap the loss
+                self.segloss = MultipleOutputLoss2(self.loss, self.ds_loss_weights)
+            else:
+                self.segloss = self.loss
     
-    # Entry point for all calls involving forward pass
-    # of deep networks. We used this approach since DataParallel module
-    # can't parallelize custom functions, we branch to different
-    # routines based on |mode|.
     def forward(self, data, mode):
         if mode == 'inference':
             with torch.no_grad():
                 fake_image, seg, _ = self.generate_fake(data)
             return fake_image, seg
         else:
-            input_semantics, real_image, mask = self.preprocess_input(data)
+            data['label'] = data['label'].cuda()
+            if self.deep_supervision:
+                for i in range(len(data['seg'])):
+                    data['seg'][i] = data['seg'][i].cuda()
+            else:
+                data['seg'] = data['seg'].cuda()
+            data['image'] = data['image'].cuda()
         
         if mode == 'generator':
+            #g_loss, generated, seg = self.compute_generator_loss(
+            #    input_image, real_image, mask)
             g_loss, generated, seg = self.compute_generator_loss(
-                input_semantics, real_image, mask)
+                data['label'], data['image'], data['seg'])
             return g_loss, generated, seg
         elif mode == 'discriminator':
+            #d_loss = self.compute_discriminator_loss(
+            #    input_image, real_image)
             d_loss = self.compute_discriminator_loss(
-                input_semantics, real_image)
+                data['label'], data['image'])
             return d_loss
         else:
             raise ValueError("|mode| is invalid")
 
     def create_optimizers(self, opt):
-        G_params = list(self.netG.parameters())
-        S_params = None
-        #G_params = list(self.netG.lowres_stream.parameters()) + \
-        #        list(self.netG.latlayers.parameters()) + list(self.netG.highres_stream.parameters())
-        #S_params = list(self.netG.lowres_stream.parameters()) + \
-        #        list(self.netG.latlayers.parameters()) + list(self.netG.highres_stream.parameters()) + list(self.netG.seg_stream.parameters())
+        #G_params = list(self.netG.parameters())
+        #S_params = None
+        G_params = list(self.netG.lowres_stream.parameters()) + \
+                list(self.netG.latlayers.parameters()) + list(self.netG.highres_stream.parameters())
+        S_params = list(self.netG.lowres_stream.parameters()) + \
+                list(self.netG.latlayers.parameters()) + list(self.netG.highres_stream.parameters()) + list(self.netG.seg_stream.parameters())
         if opt.isTrain and self.netD is not None:
             D_params = list(self.netD.parameters())
         else:
@@ -118,10 +127,10 @@ class PixSegModel(torch.nn.Module):
     ############################################################################
 
     def initialize_networks(self, opt):
-        netG = ASAPNetsMultiSeg_nnunet_fullres(opt,n_classes=4, use_dropout=True)
         #netG = ASAPNetsMultiSeg_nnunet(opt,n_classes=4, use_dropout=True)
-        #netG = ASAPNetsMultiSeg_nnunet_feat(opt,n_classes=4, dropout=True)
-        #netG = ASAPNetsMultiSeg_nnunetonly_feat(opt,n_classes=4, dropout=True)
+        #netG = ASAPNetsMultiSeg_vanillaunet_feat(opt,n_classes=4, dropout=False)
+        #netG = Synseg_vanillaunet(opt,n_classes=4, dropout=False)
+        netG = Synseg_vanillaunet_feat(opt,n_classes=4, dropout=False)
         netG.print_network()
         if len(opt.gpu_ids) > 0:
             assert(torch.cuda.is_available())
@@ -134,6 +143,10 @@ class PixSegModel(torch.nn.Module):
             if opt.isTrain:
                 netD = util.load_network(netD, 'D', opt.which_epoch, opt)
 
+        if opt.pretrained is not None:
+            print("load pretrained synthetic network from:", opt.pretrained)
+            weights = torch.load(opt.pretrained)
+            netG.load_state_dict(weights, strict=False)
         return netG, netD
     
     def initialize_networks_tri(self, opt):
@@ -167,32 +180,28 @@ class PixSegModel(torch.nn.Module):
                 netD = util.load_network(netD, 'D', opt.which_epoch, opt)
 
         return netG, netS, netD
-    # preprocess the input, such as moving the tensors to GPUs and
-    # transforming the label map to one-hot encoding
-    # |data|: dictionary of the input data
-
+    '''
     def preprocess_input(self, data):
         # move to GPU and change data types
         #if not(self.opt.no_one_hot):
         if self.use_gpu():
             data['label'] = data['label'].cuda()
-            for i in range(len(data['seg'])):
-                data['seg'][i] = data['seg'][i].cuda()
+            #for i in range(len(data['seg'])):
+            #    data['seg'][i] = data['seg'][i].cuda()
+            data['seg'] = data['seg'].cuda()
             data['image'] = data['image'].cuda()
         input_semantics = data['label']
-        #data['seg'] = data['seg'].to(dtype=torch.long).squeeze(dim=1)
         return input_semantics, data['image'], data['seg']
-    
-    def compute_generator_loss(self, input_semantics, real_image, mask):
+    '''
+    def compute_generator_loss(self, input_images, real_image, mask):
         G_losses = {}
-        fake_image, seg, lr_features = self.generate_fake(input_semantics)
+        fake_image, seg, lr_features = self.generate_fake(input_images)
         
-
         if self.opt.L1_loss:
             G_losses['L1'] = self.criterionL1(fake_image, real_image)
         
         if self.opt.use_gan:
-            pred_fake, pred_real = self.discriminate(input_semantics, fake_image, real_image)
+            pred_fake, pred_real = self.discriminate(input_images, fake_image, real_image)
 
             if not self.opt.no_adv_loss:
                 G_losses['GAN'] = self.criterionGAN(pred_fake, True, for_discriminator=False)
@@ -209,11 +218,15 @@ class PixSegModel(torch.nn.Module):
                         GAN_Feat_loss += unweighted_loss / num_D
                 G_losses['GAN_Feat'] = GAN_Feat_loss
 
+        
         ##segmentation
         G_losses['seg'] = self.segloss(seg, mask) 
         
         if self.opt.latent_code_regularization:
-            G_losses['latent_loss'] = torch.mean(lr_features ** 2) 
+            G_losses['latent_loss'] = torch.mean(lr_features ** 2)
+
+        if self.opt.consistency_loss:
+            G_losses['consistency_loss'] = 0
         
         return G_losses, fake_image, seg
 
