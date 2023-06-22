@@ -12,6 +12,7 @@ from options.base_options import data
 from options.train_options import TrainOptions
 from data.mri_dataset import MriDataset, MriDataset_DA, MriDataset_MM
 from train import setup_seed
+from train_seg import dataset
 from util.iter_counter import IterationCounter
 from util.visualizer import Visualizer
 #from trainers.pixseg_trainer import PixSegTrainer
@@ -88,14 +89,15 @@ if __name__=='__main__':
     parser.add_argument('--continue_train', action='store_true', help='continue training: load the latest model')
     parser.add_argument('--which_epoch', type=str, default='latest', help='which epoch to load? set to latest to use latest cached model')
     parser.add_argument('--niter_nogan', type=int, default=0, help='# of iter without GAN')
-    parser.add_argument('--niter', type=int, default=200, help='# of iter at starting learning rate. This is NOT the total #epochs. Totla #epochs is niter + niter_decay')
+    parser.add_argument('--niter', type=int, default=100, help='# of iter at starting learning rate. This is NOT the total #epochs. Totla #epochs is niter + niter_decay')
     parser.add_argument('--niter_decay', type=int, default=200, help='# of iter to linearly decay learning rate to zero')
     parser.add_argument('--optimizer', type=str, default='adam')
     parser.add_argument('--beta1', type=float, default=0.5, help='momentum term of adam')
     parser.add_argument('--beta2', type=float, default=0.999, help='momentum term of adam')
     parser.add_argument('--no_TTUR', action='store_true', help='Use TTUR training scheme')
+    parser.add_argument('--deep_supervision', action='store_true')
 
-    parser.add_argument('--lr', type=float, default=0.0002, help='initial learning rate for adam')
+    parser.add_argument('--lr', type=float, default=0.01, help='initial learning rate for adam')
 
     parser.add_argument('--ndf', type=int, default=64, help='# of discrim filters in first conv layer')
     parser.add_argument('--lambda_feat', type=float, default=10.0, help='weight for feature matching loss')
@@ -170,16 +172,15 @@ if __name__=='__main__':
     data_root = dataset_dict['dataset_dir']
     input_modal = dataset_dict['input_modalities']
     output_modal = dataset_dict['output_modality']
-
+    modal_dict = dataset_dict['modal_dict']
     transform_tr = transforms.Compose([
                         transforms.RandomApply([transforms.ColorJitter(brightness=0.2, contrast=0.2)], p=0.15),
                         transforms.RandomApply([transforms.GaussianBlur(kernel_size=3,sigma=(0.5,1.0))], p=0.2),
                         AddGaussianNoise(0,0.01)])
-    
-    #modal_dict = ['t1','t1ce','t2','flair']
+    #transform_tr = None 
     train_dataroot = os.path.join(data_root, 'train_data')
-    train_instance = MriDataset_DA(train_dataroot, 'patientlist.txt', \
-                    input_modal,output_modal,(img_height, img_width),transform_tr, True)
+    train_instance = MriDataset_DA(train_dataroot, 'patientlist.txt',modal_dict,  \
+                    input_modal,output_modal,(img_height, img_width), opt.deep_supervision, transform_tr, True)
     print("dataset [%s] of size %d was created" %
             (type(train_instance).__name__, len(train_instance)))
     dataloader = DataLoader(
@@ -189,10 +190,11 @@ if __name__=='__main__':
         num_workers=int(opt.nThreads),
         drop_last=opt.isTrain
     )
+
     ''' 
     val_dataroot = os.path.join(data_root, 'valid_data')
-    val_instance = MriDataset_DA(val_dataroot, 'patientlist_valid.txt', \
-                    input_modal,output_modal,(img_height, img_width), None,False)
+    val_instance = MriDataset_DA(val_dataroot, 'patientlist_valid.txt', modal_dict, \
+                    input_modal,output_modal,(img_height, img_width), opt.deep_supervision, None,False)
     print("dataset [%s] of size %d was created" %
             (type(val_instance).__name__, len(val_instance)))
 
@@ -204,6 +206,7 @@ if __name__=='__main__':
         drop_last=opt.isTrain
     )
     ''' 
+
     experiment_dir = os.path.join(opt.checkpoints_dir, opt.name)
     if not os.path.isdir(experiment_dir):
         os.mkdir(experiment_dir)
@@ -251,13 +254,17 @@ if __name__=='__main__':
         ##evaluation
         #val_seg_loss, generated_img = trainer.run_evalutation_during_training(val_dataloader)
         #logs['val_seg_loss'] = val_seg_loss
-
-        #pred_seg = trainer.get_latest_generated()
-        pred_seg = pred_seg[0].argmax(dim=1).unsqueeze(1).float()              #type:ignore
+        
+        if opt.deep_supervision:
+            pred_seg = pred_seg[0].argmax(dim=1).unsqueeze(1).float()              #type:ignore
+            gt_seg = data_i['seg'][0].float()
+        else:
+            pred_seg = pred_seg.argmax(dim=1).unsqueeze(1).float()              #type:ignore
+            gt_seg = data_i['seg'].float()
         for i in range(data_i['label'].shape[1]):
             logs['input_img_'+str(i)] = wandb.Image(data_i['label'][:,i,:,:].unsqueeze(1))
         logs['segmentation'] = wandb.Image(pred_seg)
-        logs['groundtruth'] = wandb.Image(data_i['seg'][0].float())
+        logs['groundtruth'] = wandb.Image(gt_seg)
         wandb.log(logs)
         
         time_per_epoch = time.time() - epoch_start_time

@@ -5,11 +5,9 @@ Licensed under the CC BY-NC-SA 4.0 license (https://creativecommons.org/licenses
 
 import sys,os
 import shutil
-from collections import OrderedDict
 
-from torchvision.transforms.functional import InterpolationMode
-from options.train_options import TrainOptions
-from data.mri_dataset import MriDataset, MriDataset_DA
+import data
+from data.mri_dataset import MriDataset, MriDataset_DA, MriDataset_noseg
 from trainers.pix2pix_trainer import Pix2PixTrainer
 import torch
 import time
@@ -93,8 +91,8 @@ if __name__=='__main__':
     parser.add_argument('--continue_train', action='store_true', help='continue training: load the latest model')
     parser.add_argument('--which_epoch', type=str, default='latest', help='which epoch to load? set to latest to use latest cached model')
     parser.add_argument('--niter_nogan', type=int, default=0, help='# of iter without GAN')
-    parser.add_argument('--niter', type=int, default=200, help='# of iter at starting learning rate. This is NOT the total #epochs. Totla #epochs is niter + niter_decay')
-    parser.add_argument('--niter_decay', type=int, default=200, help='# of iter to linearly decay learning rate to zero')
+    parser.add_argument('--niter', type=int, default=150, help='# of iter at starting learning rate. This is NOT the total #epochs. Totla #epochs is niter + niter_decay')
+    parser.add_argument('--niter_decay', type=int, default=150, help='# of iter to linearly decay learning rate to zero')
     parser.add_argument('--optimizer', type=str, default='adam')
     parser.add_argument('--beta1', type=float, default=0.5, help='momentum term of adam')
     parser.add_argument('--beta2', type=float, default=0.999, help='momentum term of adam')
@@ -107,7 +105,7 @@ if __name__=='__main__':
     parser.add_argument('--lambda_vgg', type=float, default=10.0, help='weight for vgg loss')
     parser.add_argument('--lambda_MSE', type=float, default=10.0, help='weight for MSE loss')
     parser.add_argument('--lambda_L1', type=float, default=100.0, help='weight for L1 loss')
-    parser.add_argument('--lambda_WD', type=float, default=1e-8, help='weight WD loss')
+    parser.add_argument('--lambda_ll', type=float, default=10.0, help='weight for L1 loss')
     parser.add_argument('--no_adv_loss', action='store_true', help='if specified, do *not* use discriminator feature matching loss')
     parser.add_argument('--no_ganFeat_loss', action='store_true', help='if specified, do *not* use discriminator feature matching loss')
     parser.add_argument('--no_vgg_loss', action='store_true', help='if specified, do *not* use VGG feature matching loss')
@@ -176,18 +174,17 @@ if __name__=='__main__':
     data_root = dataset_dict['dataset_dir']
     input_modal = dataset_dict['input_modalities']
     output_modal = dataset_dict['output_modality']
-    
+    modal_dict = dataset_dict['modal_dict']
     transform_tr = transforms.Compose([
                         transforms.RandomApply([transforms.ColorJitter(brightness=0.2, contrast=0.2)], p=0.3),
                         transforms.RandomApply([transforms.GaussianBlur(kernel_size=5,sigma=(0.5,1.0))], p=0.3),
                         AddGaussianNoise(0,0.02)])
     
-    train_dataroot = os.path.join(data_root, 'train_data')
+    #train_dataroot = os.path.join(data_root, 'train_data')
+    train_dataroot = os.path.join(data_root, 'train_syn_data')
 
-    train_instance = MriDataset_DA(train_dataroot, 'patientlist.txt', \
-                    input_modal, output_modal,(img_height, img_width),transform_tr, True)
-    #train_instance = MriDataset(train_dataroot, 'patientlist.txt', \
-            #        input_modal, output_modal,(img_height, img_width))
+    train_instance = MriDataset_DA(train_dataroot, 'patientlist.txt',modal_dict, \
+                    input_modal, output_modal,(img_height, img_width), False, transform_tr, True)
     
     print("dataset [%s] of size %d was created" %
             (type(train_instance).__name__, len(train_instance)))
@@ -198,10 +195,10 @@ if __name__=='__main__':
         num_workers=int(opt.nThreads),
         drop_last=opt.isTrain
     )
+    ''' 
     val_dataroot = os.path.join(data_root, 'valid_data')
-    #val_dataroot = os.path.join(data_root, 'test_data')
-    val_instance = MriDataset_DA(val_dataroot, 'patientlist_valid.txt', \
-                    input_modal, output_modal,(img_height, img_width), None,False)
+    val_instance = MriDataset_noseg(val_dataroot, 'patientlist_valid.txt', modal_dict, \
+                    input_modal, output_modal,(img_height, img_width), False, None,False)
     print("dataset [%s] of size %d was created" %
             (type(val_instance).__name__, len(val_instance)))
 
@@ -212,7 +209,7 @@ if __name__=='__main__':
         num_workers=int(opt.nThreads),
         drop_last=opt.isTrain
     )
-
+    '''
     experiment_dir = os.path.join(opt.checkpoints_dir, opt.name)
     if not os.path.isdir(experiment_dir):
         os.mkdir(experiment_dir)
@@ -236,6 +233,10 @@ if __name__=='__main__':
     for epoch in range(1, total_epochs + 1):
         epoch_start_time = time.time()
         print("epoch:%d" % epoch)
+        rec_loss = 0
+        latent_loss = 0
+        gan_loss = 0
+        gan_feat_loss = 0
         for i in range(batches_per_epoch):
             try:
                 data_i = next(dataiter)
@@ -243,23 +244,33 @@ if __name__=='__main__':
                 dataiter = iter(dataloader)
                 data_i = next(dataiter)
             # train generator
-            trainer.run_generator_one_step(data_i, use_gan)
+            g_losses, pred_img = trainer.run_generator_one_step(data_i, use_gan)
+            rec_loss += g_losses['L1']
+            gan_loss += g_losses['GAN']
+            gan_feat_loss += g_losses['GAN_Feat']
+            latent_loss += g_losses['latent_loss']
             # train discriminator
             if use_gan:
                 trainer.run_discriminator_one_step(data_i)
         
         trainer.update_learning_rate(epoch)
-        logs = trainer.get_latest_losses()
-        lr_G, lr_D = trainer.get_latest_lr()
-        logs['lr_G'] = lr_G
-        logs['lr_D'] = lr_D
+        print('updating learning rate:lr_G:%f, lr_D:%f' % \
+                (trainer.lr_scheduler_G.get_last_lr()[0], trainer.lr_scheduler_D.get_last_lr()[0]))
+        
+        logs = {}
+        logs['rec_loss'] = rec_loss / batches_per_epoch
+        logs['latent_loss'] = latent_loss / batches_per_epoch
+        logs['GAN'] = gan_loss / batches_per_epoch
+        logs['GAN_Feat'] = gan_feat_loss / batches_per_epoch
 
-        val_l1_loss, generated_img = trainer.run_evalutation_during_training(val_dataloader)
-        logs['val_l1_loss'] = val_l1_loss
-        logs['synthesized_image'] = wandb.Image(trainer.get_latest_generated())
+        #val_rec_loss = trainer.run_evalutation_during_training(val_dataloader)
+        #logs['val_rec_loss'] = val_rec_loss
+        
+        logs['synthesized_image'] = wandb.Image(pred_img)
         logs['real_image'] = wandb.Image(data_i['image'])
         for i in range(data_i['label'].shape[1]):
             logs['input_img_'+str(i)] = wandb.Image(data_i['label'][:,i,:,:].unsqueeze(1))
+        
         wandb.log(logs)
         wandb.log
         
