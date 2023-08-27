@@ -1,8 +1,3 @@
-"""
-Copyright (C) 2019 NVIDIA Corporation.  All rights reserved.
-Licensed under the CC BY-NC-SA 4.0 license (https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode).
-"""
-
 import sys,os
 import shutil
 
@@ -48,7 +43,7 @@ if __name__=='__main__':
     # parse options
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     # experiment specifics
-    parser.add_argument('--name', type=str, default='label2coco', help='name of the experiment')
+    parser.add_argument('--name', type=str, default='brats_t1ce', help='name of the experiment')
     parser.add_argument('--config_file', type=str,default='./configs/brats.json')
     parser.add_argument('--nThreads', default=12, type=int, help='# threads for loading data')
     parser.add_argument('--load_from_opt_file', action='store_true', help='load the options from checkpoints and use that as default')
@@ -63,14 +58,10 @@ if __name__=='__main__':
 
     # input/output sizes
     parser.add_argument('--batchSize', type=int, default=8, help='input batch size')
-    parser.add_argument('--aspect_ratio', type=float, default=1.0, help='The ratio width/height. The final height of the load image will be crop_size/aspect_ratio')
     parser.add_argument('--label_nc', type=int, default=3, help='# of input label classes without unknown class. If you have unknown class as class label, specify --contain_dopntcare_label.')
     parser.add_argument('--output_nc', type=int, default=1, help='# of output image channels')
 
     # Hyperparameters
-    parser.add_argument('--learned_ds_factor', type=int, default=16, help='enables partial learned_ds (S2 in sec. 3.2)')
-    parser.add_argument('--ds_factor', type=int, default=5, help='enables partial learned_ds (S2 in sec. 3.2)')
-    parser.add_argument('--lowest_ds_factor', type=int, default=16, help='enables partial learned_ds (S2 in sec. 3.2)')
     parser.add_argument('--lr_width', type=int, default=64, help='low res stream strided conv number of channles')
     parser.add_argument('--lr_max_width', type=int, default=1024, help='low res stream conv number of channles')
     parser.add_argument('--lr_depth', type=int, default=7, help='low res stream number of conv layers')
@@ -90,9 +81,8 @@ if __name__=='__main__':
     # for training
     parser.add_argument('--continue_train', action='store_true', help='continue training: load the latest model')
     parser.add_argument('--which_epoch', type=str, default='latest', help='which epoch to load? set to latest to use latest cached model')
-    parser.add_argument('--niter_nogan', type=int, default=0, help='# of iter without GAN')
-    parser.add_argument('--niter', type=int, default=150, help='# of iter at starting learning rate. This is NOT the total #epochs. Totla #epochs is niter + niter_decay')
-    parser.add_argument('--niter_decay', type=int, default=150, help='# of iter to linearly decay learning rate to zero')
+    parser.add_argument('--niter', type=int, default=100, help='# of iter at starting learning rate. This is NOT the total #epochs. Totla #epochs is niter + niter_decay')
+    parser.add_argument('--niter_decay', type=int, default=100, help='# of iter to linearly decay learning rate to zero')
     parser.add_argument('--optimizer', type=str, default='adam')
     parser.add_argument('--beta1', type=float, default=0.5, help='momentum term of adam')
     parser.add_argument('--beta2', type=float, default=0.999, help='momentum term of adam')
@@ -108,7 +98,6 @@ if __name__=='__main__':
     parser.add_argument('--lambda_ll', type=float, default=10.0, help='weight for L1 loss')
     parser.add_argument('--no_adv_loss', action='store_true', help='if specified, do *not* use discriminator feature matching loss')
     parser.add_argument('--no_ganFeat_loss', action='store_true', help='if specified, do *not* use discriminator feature matching loss')
-    parser.add_argument('--no_vgg_loss', action='store_true', help='if specified, do *not* use VGG feature matching loss')
     parser.add_argument('--MSE_loss', action='store_true', help='if specified, use MSE loss')
     parser.add_argument('--L1_loss', action='store_true', help='if specified, use L1 loss')
     parser.add_argument('--latent_code_regularization', action='store_true', help='if specified, use weight decay loss on the estimated parameters from LR')
@@ -125,7 +114,7 @@ if __name__=='__main__':
     # print options to help debugging
     opt = parser.parse_args()
     opt.isTrain = True   # train or test
-    setup_seed(20)
+    setup_seed(100)
     
     #################### set gpu ids  ####################
     str_ids = opt.gpu_ids.split(',')
@@ -180,8 +169,8 @@ if __name__=='__main__':
                         transforms.RandomApply([transforms.GaussianBlur(kernel_size=5,sigma=(0.5,1.0))], p=0.3),
                         AddGaussianNoise(0,0.02)])
     
-    #train_dataroot = os.path.join(data_root, 'train_data')
-    train_dataroot = os.path.join(data_root, 'train_syn_data')
+    train_dataroot = os.path.join(data_root, 'train_data')
+    #train_dataroot = os.path.join(data_root, 'train_syn_data')
 
     train_instance = MriDataset_DA(train_dataroot, 'patientlist.txt',modal_dict, \
                     input_modal, output_modal,(img_height, img_width), False, transform_tr, True)

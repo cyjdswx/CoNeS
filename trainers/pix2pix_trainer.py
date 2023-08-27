@@ -20,13 +20,8 @@ class LambdaLinear:
     
     def step(self, epoch):
         return 1.0 - max(0, epoch - self.decay_start_epoch) / (self.n_epochs - self.decay_start_epoch)
-class Pix2PixTrainer():
-    """
-    Trainer creates the model and optimizers, and uses them to
-    updates the weights of the network while reporting losses
-    and the latest visuals to visualize the progress in training.
-    """
 
+class Pix2PixTrainer():
     def __init__(self, opt, img_size):
         self.opt = opt
         device = torch.device('cpu' if self.opt.gpu_ids == -1 else 'cuda')
@@ -36,8 +31,8 @@ class Pix2PixTrainer():
         elif opt.MSE_loss:
             self.rec_loss = 'MSE'
         self.pix2pix_model = Pix2PixModel(opt,img_size, device)
-        
         self.generated = None
+
         if opt.isTrain:
             self.optimizer_G, self.optimizer_D = self.pix2pix_model.create_optimizers(opt)
             self.lr_scheduler_G = torch.optim.lr_scheduler.LambdaLR(optimizer=self.optimizer_G,\

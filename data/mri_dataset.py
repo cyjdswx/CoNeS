@@ -221,7 +221,6 @@ class MriDataset_noseg(Dataset):
                         "missing file"
                 img_list.append(filename)
             print(patient)
-            #MRI = MultiMRI2d(img_list, len(self.modal_dict))
             MRI = MultiMRI2d(img_list, self.modal_dict)
             self.img_handlers.append(MRI)
 
@@ -255,28 +254,19 @@ class MriDataset_noseg(Dataset):
         images = (images + 1) / 2
         
 
-        #segmentation = img_handle.get_img_data_dict('seg')
-        #segmentation = segmentation[...,int(slice_index)]
-        #segmentation = torch.from_numpy(segmentation)
-        #segmentation  = segmentation.unsqueeze(0)
         if self.istrain and self.transform is not None:
             ## randon flip ##
             if torch.rand(1) < 0.5:
                 images = F.hflip(images)
-                #segmentation = F.hflip(segmentation)
             if torch.rand(1) < 0.5:
                 images = F.vflip(images)
-                #segmentation = F.vflip(segmentation)
             ## random rotation ##
             d = transforms.RandomRotation.get_params([-30, 30])
             images = F.rotate(images,d, F.InterpolationMode.BILINEAR,fill=0)
-            #segmentation = F.rotate(segmentation, d, F.InterpolationMode.NEAREST, fill=0)
-        #imageseg = torch.cat([images, segmentation], dim=0)
         images = self.crop(images)
         
         inputs = images[0:len(self.input_modal),:,:]
         outputs = images[len(self.input_modal):len(self.input_modal) + len(self.output_modal),:,:]
-        #segmentation = imageseg[len(self.input_modal) + len(self.output_modal):,:,:]
         if self.istrain and self.transform is not None:
             for i in range(inputs.shape[0]):
                 if torch.rand(1) < 0.2:
@@ -597,9 +587,7 @@ class MriDataset(Dataset):
 if __name__=='__main__':
     modal_dict = ['t2','t1ce','seg']
     dataset_dir = '/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/003_1-1norm/train_data/'
-    #dataset = MRI2DTransferDataset('/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/000_train/', 'patientlist_tmp.txt',modal_dict)
 
-    #X = data["image"].type(torch.Tensor)
     #print(X.shape)
     input_modal = 't2'
     output_modal = 't1ce'

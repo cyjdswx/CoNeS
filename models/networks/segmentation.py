@@ -3,8 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from models.networks.base_network import BaseNetwork
 from models.networks.architecture import ASAPNetsBlock as ASAPNetsBlock
-from models.networks.generator import InitWeights_me, _get_coords, ASAPfunctaHRStream, ASAPfunctaHRStreamfulres, Encoder_fpn3, Bottleneck_in, Bottleneckdropout, Encoder_fpn4
-from einops import rearrange
+from models.networks.generator import InitWeights_me, ASAPfunctaHRStreamfulres,  Bottleneck_in, Encoder_fpn4
 from copy import deepcopy
 import numpy as np
 
@@ -47,7 +46,7 @@ class ASAPNetsMultiSeg_nnunet_feat(BaseNetwork):
         if dropout:
             #dropout_op_kwargs = {'p':0.2, 'inplace':True}
             dropout_op_kwargs = {'p':0, 'inplace':True}
-            self.block = Bottleneckdropout
+            self.block = Bottleneck_in
         else:
             dropout_op_kwargs = {'p':0, 'inplace':True}
             self.block = Bottleneck_in
@@ -214,7 +213,7 @@ class ASAPNetsMultiSeg_nnunetonly_feat(BaseNetwork):
         if dropout:
             dropout_op_kwargs = {'p':0.2, 'inplace':True}
             #dropout_op_kwargs = {'p':0, 'inplace':True}
-            self.block = Bottleneckdropout
+            self.block = Bottleneck_in
         else:
             dropout_op_kwargs = {'p':0, 'inplace':True}
             self.block = Bottleneck_in
@@ -264,7 +263,7 @@ class ASAPNetsMultiSeg_nnunet_fullres(BaseNetwork):
         self.gpu_ids = opt.gpu_ids
         if self.use_dropout:
             dropout_op_kwargs = {'p':0, 'inplace':True}
-            self.block = Bottleneckdropout
+            self.block = Bottleneck_in
         else:
             dropout_op_kwargs = {'p':0, 'inplace':True}
             self.block = Bottleneck_in
@@ -313,7 +312,7 @@ class ASAPNetsMultiSeg_nnunet(BaseNetwork):
         self.gpu_ids = opt.gpu_ids
         if self.use_dropout:
             dropout_op_kwargs = {'p':0, 'inplace':True}
-            self.block = Bottleneckdropout
+            self.block = Bottleneck_in
         else:
             dropout_op_kwargs = {'p':0, 'inplace':True}
             self.block = Bottleneck_in
@@ -351,7 +350,7 @@ class ASAPNetsMultiSeg_nnunet(BaseNetwork):
         seg_input = torch.cat([highres, output], dim=1)
         seg = self.seg_stream(seg_input)
         return output, seg, features#, lowres
-
+'''
 class ASAPNetsMultiSeg(BaseNetwork):
     def __init__(self, opt, n_classes, hr_stream=None, lr_stream=None, fast=False):
         super(ASAPNetsMultiSeg, self).__init__()
@@ -384,7 +383,7 @@ class ASAPNetsMultiSeg(BaseNetwork):
         seg_input = torch.cat([highres, output], dim=1)
         seg = self.seg_stream(seg_input)
         return output, seg, features#, lowres
-
+'''
 class DoubleConv(nn.Module):
     """(convolution => [BN] => ReLU) * 2"""
 

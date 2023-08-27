@@ -88,6 +88,7 @@ if __name__=='__main__':
     #pred_dir = os.path.join(save_dir, 'synimg')
     #data_dir = '/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/004_rawdata/valid_data'
     data_dir = '/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/009_brats18/valid_data/'
+    #data_dir = '/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/009_brats18/train_seg_data/'
     device = torch.device('cpu' if opt.gpu_ids == -1 else 'cuda')
     patch_size = (128,160)
     model = Pix2PixModel(opt, patch_size,device=device)
@@ -119,7 +120,6 @@ if __name__=='__main__':
         img_affine = None
         for m in input_modalities:
             image_handle = nib.load(os.path.join(data_dir, patient, patient + '_' + m + '.nii.gz'))
-            #print(os.path.join(data_dir, patient, patient + '_' + m + '.nii.gz'))
             image_np =  np.asarray(image_handle.dataobj) .astype(np.float32)
             imax = np.max(image_np)
             imin = np.min(image_np)

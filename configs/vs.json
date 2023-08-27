@@ -13,7 +13,7 @@
         "img_height": 320,
         "img_width": 320,
         "modal_dict": ["t1ce","t2","seg"],
-        "input_modalities": ["t1ce", "t2"],
+        "input_modalities": ["t2"],
         "output_modality": ["t1ce"],
         "classes": 3
     },

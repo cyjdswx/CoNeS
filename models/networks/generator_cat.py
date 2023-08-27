@@ -662,33 +662,6 @@ class Bottleneckdropout(nn.Module):
         out = F.relu(out)
         return out
 
-class Bottleneck_in(nn.Module):
-    expansion = 4
-
-    def __init__(self, in_planes, planes, stride=1):
-        super(Bottleneck_in, self).__init__()
-        self.conv1 = nn.Conv2d(in_planes, planes, kernel_size=1, bias=False)
-        self.bn1 = nn.InstanceNorm2d(planes, affine=True)
-        self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
-        self.bn2 = nn.InstanceNorm2d(planes, affine=True)
-        self.conv3 = nn.Conv2d(planes, self.expansion*planes, kernel_size=1, bias=False)
-        self.bn3 = nn.InstanceNorm2d(self.expansion*planes, affine=True)
-
-        self.shortcut = nn.Sequential()
-        if stride != 1 or in_planes != self.expansion*planes:
-            self.shortcut = nn.Sequential(
-                nn.Conv2d(in_planes, self.expansion*planes, kernel_size=1, stride=stride, bias=False),
-                nn.InstanceNorm2d(self.expansion*planes, affine=True)
-            )
-
-    def forward(self, x):
-        out = F.relu(self.bn1(self.conv1(x)))
-        out = F.relu(self.bn2(self.conv2(out)))
-        out = self.bn3(self.conv3(out))
-        out += self.shortcut(x)
-        out = F.relu(out)
-        return out
-
 class Encoder_fpn_att(th.nn.Module):
     "multi scale encoder inspired by fpn"
     def __init__(self, num_in,  block, num_blocks ,ndf=64, kernel_size=3):
@@ -802,6 +775,63 @@ class Encoder_fpn4(th.nn.Module):
         c4 = self.layer3(c3)
         c5 = self.layer4(c4)
         
+        # Top-down & smooth
+        p5 = self.toplayer(c5)
+        p4 = self._upsample_add(p5, self.latlayers1(c4))
+        p4 = self.smooth1(p4)
+        p3 = self._upsample_add(p4, self.latlayers2(c3))
+        p3 = self.smooth2(p3)
+        p2 = self._upsample_add(p3, self.latlayers3(c2))
+        p2 = self.smooth3(p2)
+        return p2
+
+class Encoder_fpn4_ds(th.nn.Module):
+    "multi scale encoder inspired by fpn fully resolution"
+    def __init__(self, num_in,  block, num_blocks ,ndf=64, kernel_size=3):
+        super(Encoder_fpn4_ds, self).__init__()
+        self.in_planes = ndf
+        self.block_expansion = 4
+        self.conv1 = nn.Conv2d(num_in, ndf, kernel_size=7, stride=1, padding=3, bias=False)
+        self.bn1 = nn.InstanceNorm2d(ndf, affine=True)
+
+        ## Bottom-up layers
+        self.layer1 = self._make_layer(block, ndf, num_blocks[0], stride=2)
+        self.layer2 = self._make_layer(block, ndf * 2, num_blocks[1], stride=2)
+        self.layer3 = self._make_layer(block, ndf * 4, num_blocks[2], stride=2)
+        self.layer4 = self._make_layer(block, ndf * 8, num_blocks[3], stride=2)
+
+        self.toplayer = nn.Conv2d(ndf * 8 * self.block_expansion, 256, kernel_size=1, stride=1,padding=0)   #Reduce channels
+        
+        # Smooth layers
+        self.smooth1 = nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1)
+        self.smooth2 = nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1)
+        self.smooth3 = nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1)
+        
+        ## lateral layers
+        self.latlayers1 = nn.Conv2d(ndf * 16, 256, kernel_size=1, stride=1,padding=0)
+        self.latlayers2 = nn.Conv2d(ndf * 8, 256, kernel_size=1,stride=1,padding=0)
+        self.latlayers3 = nn.Conv2d(ndf * 4, 256, kernel_size=1,stride=1,padding=0)
+    
+    def _make_layer(self, block, planes, num_blocks, stride):
+        strides = [stride] + [1] * (num_blocks - 1)
+        layers = []
+        for stride in strides:
+            layers.append(block(self.in_planes, planes, stride))
+            self.in_planes = planes * block.expansion
+        return nn.Sequential(*layers)
+
+    def _upsample_add(self, x, y):
+        ''' upsample and add two feature maps'''
+        _, _, H, W = y.size()
+        return F.upsample(x, size=(H,W), mode='bilinear') + y
+
+    def forward(self,x):
+        # Bottom-up
+        c1 = F.relu(self.bn1(self.conv1(x)))
+        c2 = self.layer1(c1)
+        c3 = self.layer2(c2)
+        c4 = self.layer3(c3)
+        c5 = self.layer4(c4)
         # Top-down & smooth
         p5 = self.toplayer(c5)
         p4 = self._upsample_add(p5, self.latlayers1(c4))

@@ -4,23 +4,14 @@ Licensed under the CC BY-NC-SA 4.0 license (https://creativecommons.org/licenses
 """
 
 import os, sys
-from os.path import isdir
-from collections import OrderedDict
 
-from wandb.sdk.wandb_run import wandb_metric
-from options.base_options import data
-from options.train_options import TrainOptions
 from data.mri_dataset import MriDataset, MriDataset_DA, MriDataset_MM
 from train import setup_seed
-from train_seg import dataset
-from util.iter_counter import IterationCounter
-from util.visualizer import Visualizer
 #from trainers.pixseg_trainer import PixSegTrainer
 from trainers.unet_trainer import UnetTrainer
 import time
 import torch
 from torch.utils.data import DataLoader
-from tqdm import tqdm
 import json
 import wandb
 import argparse
@@ -89,8 +80,8 @@ if __name__=='__main__':
     parser.add_argument('--continue_train', action='store_true', help='continue training: load the latest model')
     parser.add_argument('--which_epoch', type=str, default='latest', help='which epoch to load? set to latest to use latest cached model')
     parser.add_argument('--niter_nogan', type=int, default=0, help='# of iter without GAN')
-    parser.add_argument('--niter', type=int, default=100, help='# of iter at starting learning rate. This is NOT the total #epochs. Totla #epochs is niter + niter_decay')
-    parser.add_argument('--niter_decay', type=int, default=200, help='# of iter to linearly decay learning rate to zero')
+    parser.add_argument('--niter', type=int, default=50, help='# of iter at starting learning rate. This is NOT the total #epochs. Totla #epochs is niter + niter_decay')
+    parser.add_argument('--niter_decay', type=int, default=50, help='# of iter to linearly decay learning rate to zero')
     parser.add_argument('--optimizer', type=str, default='adam')
     parser.add_argument('--beta1', type=float, default=0.5, help='momentum term of adam')
     parser.add_argument('--beta2', type=float, default=0.999, help='momentum term of adam')
@@ -179,8 +170,12 @@ if __name__=='__main__':
                         AddGaussianNoise(0,0.01)])
     #transform_tr = None 
     train_dataroot = os.path.join(data_root, 'train_data')
+    #train_dataroot = os.path.join(data_root, 'train_seg_data')
+    #train_dataroot = os.path.join(data_root, 'train_aug_data')
     train_instance = MriDataset_DA(train_dataroot, 'patientlist.txt',modal_dict,  \
                     input_modal,output_modal,(img_height, img_width), opt.deep_supervision, transform_tr, True)
+    #train_instance = MriDataset_DA(train_dataroot, 'patientlist_fake.txt',modal_dict,  \
+    #                input_modal,output_modal,(img_height, img_width), opt.deep_supervision, transform_tr, True)
     print("dataset [%s] of size %d was created" %
             (type(train_instance).__name__, len(train_instance)))
     dataloader = DataLoader(

@@ -4,22 +4,14 @@ Licensed under the CC BY-NC-SA 4.0 license (https://creativecommons.org/licenses
 """
 
 import os,sys
-from collections import OrderedDict
-
 from skimage.measure import label
 import data
 import json
 import argparse
-from options.test_options import TestOptions
-from models.pixseg_model import PixSegModel
 from models.unet_model import UnetModel
 #from util.visualizer import Visualizer
 import torch.nn.functional as F
-from util import html
-from torchvision.utils import save_image
-import time
 import torch
-import math
 import nibabel as nib
 import numpy as np
 from util.util import pad_nd_image, compute_steps_for_sliding_window, get_gaussian
@@ -118,7 +110,24 @@ if __name__=='__main__':
     #data_dir = '/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/009_brats18/valid_data_synt1ce_inr'
     #data_dir = '/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/009_brats18/valid_data_synt1ce_pix2pix'
     #data_dir = '/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/009_brats18/valid_data_synt1ce_resvit'
-    data_dir = '/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/009_brats18/valid_data_synt1ce_pGAN'
+    #data_dir = '/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/009_brats18/valid_data_synt1ce_pGAN'
+    #data_dir = '/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/009_brats18/valid_data_synt1ce_asap'
+    data_dir = '/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/009_brats18/valid_data_synt1ce_asap_8'
+    #data_dir = '/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/009_brats18/valid_data_synt1_asap'
+    #data_dir = '/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/009_brats18/valid_data_synt2_asap'
+    #data_dir = '/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/009_brats18/valid_data_synflair_asap'
+    #data_dir = '/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/009_brats18/valid_data_synt1_inr'
+    #data_dir = '/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/009_brats18/valid_data_synt1_pix2pix'
+    #data_dir = '/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/009_brats18/valid_data_synt1_pGAN'
+    #data_dir = '/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/009_brats18/valid_data_synt1_resvit'
+    #data_dir = '/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/009_brats18/valid_data_synt2_pix2pix'
+    #data_dir = '/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/009_brats18/valid_data_synt2_pGAN'
+    #data_dir = '/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/009_brats18/valid_data_synt2_resvit'
+    #data_dir = '/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/009_brats18/valid_data_synt2_inr'
+    #data_dir = '/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/009_brats18/valid_data_synflair_pix2pix'
+    #data_dir = '/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/009_brats18/valid_data_synflair_pGAN'
+    #data_dir = '/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/009_brats18/valid_data_synflair_resvit'
+    #data_dir = '/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/009_brats18/valid_data_synflair_inr'
     device = torch.device('cpu' if opt.gpu_ids == -1 else 'cuda')
     patch_size = (128,160)
     #patch_size = (160,192)

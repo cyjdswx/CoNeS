@@ -1,8 +1,3 @@
-"""
-Copyright (C) 2019 NVIDIA Corporation.  All rights reserved.
-Licensed under the CC BY-NC-SA 4.0 license (https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode).
-"""
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -41,22 +36,18 @@ class GANLoss(nn.Module):
         if target_is_real:
             if self.real_label_tensor is None:
                 self.real_label_tensor = torch.Tensor(np.array(1)).fill_(self.real_label)
-                #self.real_label_tensor = self.real_label_tensor.to(device=self.device, dtype=torch.float32)
                 self.real_label_tensor = self.Tensor(1).fill_(self.real_label)
                 self.real_label_tensor.requires_grad_(False)
             return self.real_label_tensor.expand_as(input)
         else:
             if self.fake_label_tensor is None:
                 self.fake_label_tensor = torch.Tensor(np.array(1)).fill_(self.fake_label)
-                #self.fake_label_tensor = self.fake_label_tensor.to(device=self.device, dtype=torch.float32)
                 self.fake_label_tensor = self.Tensor(1).fill_(self.fake_label)
                 self.fake_label_tensor.requires_grad_(False)
             return self.fake_label_tensor.expand_as(input)
 
     def get_zero_tensor(self, input):
         if self.zero_tensor is None:
-            #self.zero_tensor = torch.Tensor(np.array(1)).fill_(0)
-            #self.zero_tensor = self.zero_tensor.to(device=self.device, dtype=torch.float32)
             self.zero_tensor = self.Tensor(1).fill_(0)
             self.zero_tensor.requires_grad_(False)
         return self.zero_tensor.expand_as(input)
@@ -89,8 +80,6 @@ class GANLoss(nn.Module):
                 return input.mean()
 
     def __call__(self, input, target_is_real, for_discriminator=True):
-        # computing loss is a bit complicated because |input| may not be
-        # a tensor, but list of tensors in case of multiscale discriminator
         if isinstance(input, list):
             loss = 0
             for pred_i in input:
@@ -105,7 +94,7 @@ class GANLoss(nn.Module):
             return self.loss(input, target_is_real, for_discriminator)
 
 
-# Perceptual loss that uses a pretrained VGG network
+# Perceptual loss 
 class VGGLoss(nn.Module):
     def __init__(self, gpu_ids):
         super(VGGLoss, self).__init__()
@@ -121,7 +110,6 @@ class VGGLoss(nn.Module):
         return loss
 
 def dice_coeff(input: Tensor, target: Tensor, reduce_batch_first: bool = False, epsilon=1e-6):
-    # Average of Dice coefficient for all batches, or for a single mask
     assert input.size() == target.size()
     if input.dim() == 2 and reduce_batch_first:
         raise ValueError(f'Dice: asked to reduce batch but got tensor without batch dimension (shape {input.shape})')
@@ -134,7 +122,6 @@ def dice_coeff(input: Tensor, target: Tensor, reduce_batch_first: bool = False, 
 
         return (2 * inter + epsilon) / (sets_sum + epsilon)
     else:
-        # compute and average metric for each batch element
         dice = 0
         for i in range(input.shape[0]):
             dice += dice_coeff(input[i, ...], target[i, ...])
@@ -142,7 +129,6 @@ def dice_coeff(input: Tensor, target: Tensor, reduce_batch_first: bool = False, 
 
 
 def multiclass_dice_coeff(input: Tensor, target: Tensor, reduce_batch_first: bool = False, epsilon=1e-6):
-    # Average of Dice coefficient for all classes
     assert input.size() == target.size()
     dice = 0
     for channel in range(input.shape[1]):
@@ -152,7 +138,6 @@ def multiclass_dice_coeff(input: Tensor, target: Tensor, reduce_batch_first: boo
 
 
 def dice_loss(input: Tensor, target: Tensor, multiclass: bool = False):
-    # Dice loss (objective to minimize) between 0 and 1
     assert input.size() == target.size()
     fn = multiclass_dice_coeff if multiclass else dice_coeff
     return 1 - fn(input, target, reduce_batch_first=True)
@@ -168,17 +153,6 @@ def sum_tensor(inp, axes, keepdim=False):
     return inp
 
 def get_tp_fp_fn_tn(net_output, gt, axes=None, mask=None, square=False):
-    """
-    net_output must be (b, c, x, y(, z)))
-    gt must be a label map (shape (b, 1, x, y(, z)) OR shape (b, x, y(, z))) or one hot encoding (b, c, x, y(, z))
-    if mask is provided it must have shape (b, 1, x, y(, z)))
-    :param net_output:
-    :param gt:
-    :param axes: can be (, ) = no summation
-    :param mask: mask must be 1 for valid pixels and 0 for invalid pixels
-    :param square: if True then fp, tp and fn will be squared before summation
-    :return:
-    """
     if axes is None:
         axes = tuple(range(2, len(net_output.size())))
 
@@ -263,19 +237,7 @@ class SoftDiceLoss(nn.Module):
         #return -dc
 
 softmax_helper = lambda x: F.softmax(x, 1) 
-'''
-class RobustCrossEntropyLoss(nn.CrossEntropyLoss):
-    """
-    this is just a compatibility layer because my target tensor is float and has an extra dimension
-    """
-    def forward(self, input: Tensor, target: Tensor) -> Tensor:
-        if len(target.shape) == len(input.shape):
-            assert target.shape[1] == 1
-            target = target[:, 0]
-        else:
-            print('nothing')
-        return super().forward(input, target.long())
-'''
+
 class DC_and_CE_loss(nn.Module):
     def __init__(self, soft_dice_kwargs, ce_kwargs, aggregate="sum", square_dice=False, weight_ce=1, weight_dice=1,
                  log_dice=False, ignore_label=None):
@@ -296,22 +258,11 @@ class DC_and_CE_loss(nn.Module):
         self.weight_dice = weight_dice
         self.weight_ce = weight_ce
         self.aggregate = aggregate
-        #self.ce = RobustCrossEntropyLoss(**ce_kwargs)
         self.ce = nn.CrossEntropyLoss(**ce_kwargs)
         self.ignore_label = ignore_label
-
-        #if not square_dice:
         self.dc = SoftDiceLoss(apply_nonlin=softmax_helper, **soft_dice_kwargs)
-        #else:
-        #    self.dc = SoftDiceLossSquared(apply_nonlin=softmax_helper, **soft_dice_kwargs)
 
     def forward(self, net_output, target):
-        """
-        target must be b, c, x, y(, z) with c=1
-        :param net_output:
-        :param target:
-        :return:
-        """
         if self.ignore_label is not None:
             assert target.shape[1] == 1, 'not implemented for one hot encoding'
             mask = target != self.ignore_label
@@ -333,12 +284,6 @@ class DC_and_CE_loss(nn.Module):
 
 class MultipleOutputLoss2(nn.Module):
     def __init__(self, loss, weight_factors=None):
-        """
-        use this if you have several outputs and ground truth (both list of same len) and the loss should be computed
-        between them (x[0] and y[0], x[1] and y[1] etc)
-        :param loss:
-        :param weight_factors:
-        """
         super(MultipleOutputLoss2, self).__init__()
         self.weight_factors = weight_factors
         self.loss = loss
@@ -356,8 +301,3 @@ class MultipleOutputLoss2(nn.Module):
             if weights[i] != 0:
                 l += weights[i] * self.loss(x[i], y[i])
         return l
-
-# KL Divergence loss used in VAE with an image encoder
-class KLDLoss(nn.Module):
-    def forward(self, mu, logvar):
-        return -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())

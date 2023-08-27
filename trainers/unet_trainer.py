@@ -6,7 +6,6 @@ Licensed under the CC BY-NC-SA 4.0 license (https://creativecommons.org/licenses
 from models.networks.sync_batchnorm import DataParallelWithCallback
 from models.unet_model import UnetModel
 import torch
-from tqdm import tqdm
 from util.util import PolyLRScheduler
 
 class LambdaLinear:

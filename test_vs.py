@@ -3,27 +3,22 @@ Copyright (C) 2019 NVIDIA Corporation.  All rights reserved.
 Licensed under the CC BY-NC-SA 4.0 license (https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode).
 """
 
-import os,sys
 from collections import OrderedDict
+import argparse
 
 import data
-from options.test_options import TestOptions
 from models.pix2pix_model import Pix2PixModel
 #from util.visualizer import Visualizer
-from util import html
-from torchvision.utils import save_image
 import SimpleITK as sitk
-import time
 import torch
-import math
 import nibabel as nib
 import numpy as np
-from util.util import pad_nd_image, compute_steps_for_sliding_window, get_gaussian
+from util.util import pad_nd_image, compute_steps_for_sliding_window
 import pickle
 from batchgenerators.augmentations.utils import resize_segmentation
 from skimage.transform import resize
 from scipy.ndimage.interpolation import map_coordinates
-
+import os,sys
 def create_nonzero_mask(data):
     from scipy.ndimage import binary_fill_holes
     assert len(data.shape) == 4 or len(data.shape) == 3, "data must have shape (C, X, Y, Z) or shape (C, X, Y)"
@@ -136,13 +131,63 @@ def get_bbox_from_mask(mask, outside_value=0):
     maxyidx = int(np.max(mask_voxel_coords[2])) + 1
     return [[minzidx, maxzidx], [minxidx, maxxidx], [minyidx, maxyidx]]
 
-def test(opt):
-    save_dir = '/exports/lkeb-hpc/ychen/03_result/02_image_synthesis/02_translation_results/neuro_vs_t2t1ce/'
+if __name__=='__main__':
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    # experiment specifics
+    parser.add_argument('--name', type=str, default='label2coco', help='name of the experiment')
+    parser.add_argument('--config_file', type=str,default='./configs/brats.json')
+    parser.add_argument('--nThreads', default=12, type=int, help='# threads for loading data')
+    parser.add_argument('--load_from_opt_file', action='store_true', help='load the options from checkpoints and use that as default')
+    parser.add_argument('--gpu_ids', type=str, default='0', help='gpu ids: e.g. 0  0,1,2, 0,2. use -1 for CPU')
+    parser.add_argument('--checkpoints_dir', type=str, default='./checkpoints', help='models are saved here')
+    
+    parser.add_argument('--model', type=str, default='pix2pix', help='which model to use')
+    parser.add_argument('--norm_G', type=str, default='instanceaffine', help='instance normalization or batch normalization')
+    parser.add_argument('--norm_D', type=str, default='spectralinstance', help='instance normalization or batch normalization')
+    parser.add_argument('--norm_E', type=str, default='spectralinstance', help='instance normalization or batch normalization')
+    parser.add_argument('--phase', type=str, default='train', help='train, val, test, etc')
+
+    # input/output sizes
+    parser.add_argument('--batchSize', type=int, default=8, help='input batch size')
+    parser.add_argument('--aspect_ratio', type=float, default=1.0, help='The ratio width/height. The final height of the load image will be crop_size/aspect_ratio')
+    parser.add_argument('--label_nc', type=int, default=3, help='# of input label classes without unknown class. If you have unknown class as class label, specify --contain_dopntcare_label.')
+    parser.add_argument('--output_nc', type=int, default=1, help='# of output image channels')
+
+    # Hyperparameters
+    parser.add_argument('--learned_ds_factor', type=int, default=16, help='enables partial learned_ds (S2 in sec. 3.2)')
+    parser.add_argument('--ds_factor', type=int, default=5, help='enables partial learned_ds (S2 in sec. 3.2)')
+    parser.add_argument('--lowest_ds_factor', type=int, default=16, help='enables partial learned_ds (S2 in sec. 3.2)')
+    parser.add_argument('--lr_width', type=int, default=64, help='low res stream strided conv number of channles')
+    parser.add_argument('--lr_max_width', type=int, default=1024, help='low res stream conv number of channles')
+    parser.add_argument('--lr_depth', type=int, default=7, help='low res stream number of conv layers')
+    parser.add_argument('--hr_width', type=int, default=64, help='high res stream number of MLP channles')
+    parser.add_argument('--hr_depth', type=int, default=5, help='high res stream number of MLP layers')
+    parser.add_argument('--latent_dim', type=int, default=64, help='high res stream number of MLP layers')
+    parser.add_argument('--reflection_pad', action='store_true', help='if specified, use reflection padding at lr stream')
+    parser.add_argument('--replicate_pad', action='store_true', help='if specified, use replicate padding at lr stream')
+    parser.add_argument('--netG', type=str, default='ASAPNets', help='selects model to use for netG')
+    parser.add_argument('--init_type', type=str, default='xavier', help='network initialization [normal|xavier|kaiming|orthogonal]')
+    parser.add_argument('--init_variance', type=float, default=0.02, help='variance of the initialization distribution')
+    parser.add_argument('--hr_coor', choices=('cosine', 'None','siren'), default='cosine')
+
+    parser.add_argument('--nef', type=int, default=16, help='# of encoder filters in the first conv layer')
+
+    parser.add_argument('--which_epoch', type=str, default='latest', help='which epoch to load? set to latest to use latest cached model')
+    parser.add_argument('--results_dir', type=str, default='./results/', help='saves results here.')
+        
+    parser.set_defaults(serial_batches=True)
+    parser.set_defaults(no_flip=True)
+    parser.set_defaults(phase='test')
+    
+    opt = parser.parse_args()
+    opt.isTrain = False   # train or test
+    
+    save_dir = opt.results_dir
     data_dir = '/exports/lkeb-hpc/ychen/01_data/03_preprocessed/03_vssyn/01_rawdata/valid_data/'
     #dataloader = data.create_dataloader(opt)
-    traindata_dir="/exports/lkeb-hpc/ychen/01_data/03_preprocessed/03_vssyn/03_preprocessednew/1-1minmax"
+    traindata_dir="/exports/lkeb-hpc/ychen/01_data/03_preprocessed/03_vssyn/02_preprocessed"
     device = torch.device('cpu' if opt.gpu_ids == -1 else 'cuda')
-    patch_size = (448,448)
+    patch_size = (320,320)
     model = Pix2PixModel(opt, patch_size,device=device)
     model.eval()
 
@@ -165,7 +210,7 @@ def test(opt):
     #                    (opt.name, opt.phase, opt.which_epoch))
     time_total = 0
     # testa
-    input_modalities = {'t2'}
+    input_modalities = {'t1ce'}
     
     for patient in patientlist:
         print(patient)
@@ -230,7 +275,7 @@ def test(opt):
                     ub_y = y + patch_size[1]
                     with torch.no_grad():
                         data_to_test = data[None, :, lb_x:ub_x, lb_y:ub_y]
-                        fake_img = model(data_to_test, mode='my_inference')
+                        fake_img = model(data_to_test,False,  mode='my_inference')
                         probs = fake_img.squeeze(0)
                         
                         aggregated_results[:,lb_x:ub_x,lb_y:ub_y] += probs
@@ -253,6 +298,3 @@ def test(opt):
         save_name = os.path.join(save_dir, patient + ".nii.gz")
         nib.save(img_to_save,save_name)
 
-if __name__ == '__main__':
-    opt = TestOptions().parse()
-    test(opt)
