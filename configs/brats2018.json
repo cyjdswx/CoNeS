@@ -1,0 +1,29 @@
+{
+    "experiment": {
+        "dataset_name": "brats",
+        "experimentid": "patchganseg_4mflair", 
+        "sample_interval": 400, 
+        "save_dir": "/exports/lkeb-hpc/ychen/03_result/02_image_synthesis/01_checkpoint/brats/",
+        "gpu_ids": "0"
+    }, 
+
+    "dataset": {
+        "dataset_dir": "/exports/lkeb-hpc/ychen/01_data/03_preprocessed/02_bratsSyn/010_brats18_preprocessed/",
+        "img_channels": 1,
+        "img_height": 128,
+        "img_width": 160,
+        "input_modalities": ["t1ce", "t1", "t2","flair"],
+        "output_modality": ["t1ce"],
+        "modal_dict": ["t1", "t1ce", "t2", "flair","seg"], 
+        "classes": 3
+    },
+
+    "optimization": {
+        "n_epochs": 500, 
+        "batch_size": 16, 
+        "learning_rate": 0.0002, 
+        "b1": 0.9, 
+        "b2": 0.999, 
+        "decay_epoch": 50
+    }
+}
