@@ -197,9 +197,13 @@ if __name__=='__main__':
         drop_last=opt.isTrain
     )
     '''
+    #### create checkpoints directory ####
+    if not os.path.isdir(opt.checkpoints_dir):
+        os.mkdir(opt.checkpoints_dir)
     experiment_dir = os.path.join(opt.checkpoints_dir, opt.name)
     if not os.path.isdir(experiment_dir):
         os.mkdir(experiment_dir)
+
     datajson_dir = os.path.join(opt.checkpoints_dir, opt.name, 'data.json')
     shutil.copy(opt.config_file, datajson_dir)
     
