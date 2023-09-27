@@ -1,14 +1,13 @@
 import sys,os
 import shutil
 
-import data
-from data.mri_dataset import MriDataset, MriDataset_DA, MriDataset_noseg
-from trainers.pix2pix_trainer import Pix2PixTrainer
+from data.mri_dataset import MriDataset_DA
+#from trainers.pix2pix_trainer import Pix2PixTrainer
+from trainers.cones_trainer import ConesTrainer
 import torch
 import time
 from torch.backends import cudnn
 from torch.utils.data import DataLoader
-from tqdm import tqdm
 import json
 import random
 import numpy as np
@@ -170,7 +169,6 @@ if __name__=='__main__':
                         AddGaussianNoise(0,0.02)])
     
     train_dataroot = os.path.join(data_root, 'train_data')
-    #train_dataroot = os.path.join(data_root, 'train_syn_data')
 
     train_instance = MriDataset_DA(train_dataroot, 'patientlist.txt',modal_dict, \
                     input_modal, output_modal,(img_height, img_width), False, transform_tr, True)
@@ -206,15 +204,13 @@ if __name__=='__main__':
     shutil.copy(opt.config_file, datajson_dir)
     
     # initialize trainer
-    trainer = Pix2PixTrainer(opt, (img_height, img_width))
+    trainer = ConesTrainer(opt, (img_height, img_width))
     batches_per_epoch = 500
 
     if opt.use_gan:
-        print('using gan architecture')
         use_gan = True
     else:
         use_gan = False
-        print('not using gan')
     
     dataiter = iter(dataloader)
     total_epochs = opt.niter + opt.niter_decay

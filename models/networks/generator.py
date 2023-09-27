@@ -1,10 +1,9 @@
-from json import decoder
 from einops import rearrange
-import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from models.networks.base_network import BaseNetwork
-from models.networks.generator_cat import Encoder_fpn4, Encoder_fpn4_ds
+#from models.networks.generator_cat import Encoder_fpn4
+from models.networks.encoder import ConesEncoder
 import torch as th
 from math import pi
 
@@ -36,13 +35,6 @@ class InitWeights_me(object):
                 raise NotImplementedError('initialization method [%s] is not implemented' % self.init_type)
             if module.bias is not None:
                 nn.init.constant_(module.bias, 0.0)
-
-def first_layer_sine_init(m):
-    with torch.no_grad():
-        if hasattr(m, 'weight'):
-            num_input = m.weight.size(-1)
-            m.weight.uniform_(-1 / num_input, 1 / num_input)
-
 
 def _get_coords_global(bs, h, w, device, ds):
     """Creates the position encoding for the pixel-wise MLPs"""
@@ -93,10 +85,10 @@ class Bottleneck_in(nn.Module):
         out = F.relu(out)
         return out
 
-class ASAPfunctaHRStreamfulres(th.nn.Module):
-    """Addaptive pixel-wise MLPs"""
+class ConesDecoder(th.nn.Module):
+    """pixel-wise MLPs"""
     def __init__(self, num_inputs=13, num_outputs=3, width=64, depth=5, coordinates="cosine"):
-        super(ASAPfunctaHRStreamfulres, self).__init__()
+        super(ConesDecoder, self).__init__()
 
         self.pe_factor = 6
         self.num_inputs = num_inputs
@@ -116,13 +108,8 @@ class ASAPfunctaHRStreamfulres(th.nn.Module):
             #layer_name = 'fc'+str(i)
             self.net.append(nn.Linear(self.channels[i], self.channels[i+1], bias=True))
 
-    @property  # for backward compatibility
-    def ds(self):
-        return self.downsampling
-
-
     def _set_channels(self):
-        """Compute and store the hr-stream layer dimensions."""
+        """Compute and store the layer dimensions."""
         in_ch = self.num_inputs
         #in_ch = 0
         if self.coordinates == "cosine":
@@ -150,6 +137,7 @@ class ASAPfunctaHRStreamfulres(th.nn.Module):
         return self.biases[idx]
 
     def forward(self, highres, lr_params):
+        #print(lr_params.shape)
         assert lr_params.shape[1] == self.num_params, "incorrect input params"
         bs, _, h, w = highres.shape
         bs, _, h_lr, w_lr = lr_params.shape
@@ -157,19 +145,15 @@ class ASAPfunctaHRStreamfulres(th.nn.Module):
         if not(self.coordinates is None):
             if self.xy_coords is None:
                 self.xy_coords = _get_coords_global(bs, h, w, highres.device, self.pe_factor)
-            ##for ablation study
+            ##for ablation experiments
             highres = th.cat([highres, self.xy_coords], 1)
             #highres = self.xy_coords
-        
-        # Split input in tiles of size kxk according to the NN interp factor (the total downsampling factor),
-        # with channels last (for matmul)
-        # all pixels within a tile of kxk are processed by the same MLPs parameters
         nci = highres.shape[1]
         out = rearrange(highres,'b c h w -> b h w c')
         num_layers = len(self.channels) - 1
         for idx, nci in enumerate(self.channels[:-1]):
             nco = self.channels[idx + 1]
-            # Select params in lowres buffer
+            # Select params in the buffer
             bstart, bstop = self._get_bias_indices(idx)
             b_ = lr_params[:, bstart:bstop]
             out = self.net[idx](out)
@@ -183,549 +167,30 @@ class ASAPfunctaHRStreamfulres(th.nn.Module):
         out = rearrange(out,'b h w c-> b c h w')
         return out
 
-class ASAPfunctaHRStreamfulres_ds(th.nn.Module):
-    """Addaptive pixel-wise MLPs"""
-    def __init__(self, num_inputs=13, num_outputs=3, width=64, depth=5, coordinates="cosine"):
-        super(ASAPfunctaHRStreamfulres_ds, self).__init__()
-
-        self.pe_factor = 6
-        self.num_inputs = num_inputs
-        self.num_outputs = num_outputs
-        self.width = width
-        self.depth = depth
-        self.coordinates = coordinates
-        self.xy_coords = None
-        self.channels = []
-        self._set_channels()
-        self.num_params = 0
-        self.biases = []
-        print(self.channels)
-        self._set_num_params()
-        self.net = nn.ModuleList()
-        for i in range(len(self.channels) - 1):
-            #layer_name = 'fc'+str(i)
-            self.net.append(nn.Linear(self.channels[i], self.channels[i+1], bias=True))
-
-    @property  # for backward compatibility
-    def ds(self):
-        return self.downsampling
-
-
-    def _set_channels(self):
-        """Compute and store the hr-stream layer dimensions."""
-        in_ch = self.num_inputs
-        #in_ch = 0
-        if self.coordinates == "cosine":
-            in_ch += 4*(self.pe_factor+1)
-        self.channels = [in_ch]
-
-        for _ in range(self.depth - 1):  # intermediate layer -> cste size
-            self.channels.append(self.width)
-        # output layer
-        self.channels.append(self.num_outputs)
-    
-    def _set_num_params(self):
-        nparams = 0
-        # go over input/output channels for each layer
-        idx = 0
-        for layer, nci in enumerate(self.channels[:-1]):
-            nco = self.channels[layer + 1] 
-            nparams += nco  # FC biases
-            self.biases.append((idx, idx + nco))
-            idx += nco
-
-        self.num_params = nparams
-
-    def _get_bias_indices(self, idx):
-        return self.biases[idx]
-
-    def forward(self, highres, lr_params):
-        assert lr_params.shape[1] == self.num_params, "incorrect input params"
-        bs, _, h, w = highres.shape
-        bs, _, h_lr, w_lr = lr_params.shape
-        # positional encoding
-        if not(self.coordinates is None):
-            if self.xy_coords is None:
-                self.xy_coords = _get_coords_global(bs, h, w, highres.device, self.pe_factor)
-            ##for ablation study
-            highres = th.cat([highres, self.xy_coords], 1)
-            #highres = self.xy_coords
-        
-        # Split input in tiles of size kxk according to the NN interp factor (the total downsampling factor),
-        # with channels last (for matmul)
-        # all pixels within a tile of kxk are processed by the same MLPs parameters
-        nci = highres.shape[1]
-        out = rearrange(highres,'b c h w -> b h w c')
-        num_layers = len(self.channels) - 1
-        lr_params = torch.repeat_interleave(lr_params,repeats=2, dim=2)
-        lr_params = torch.repeat_interleave(lr_params,repeats=2, dim=3)
-        for idx, nci in enumerate(self.channels[:-1]):
-            nco = self.channels[idx + 1]
-            # Select params in lowres buffer
-            bstart, bstop = self._get_bias_indices(idx)
-            b_ = lr_params[:, bstart:bstop]
-            out = self.net[idx](out)
-            b_ = b_.permute(0, 2, 3, 1)
-            out = out + b_
-            # Apply RelU non-linearity in all but the last layer, and tanh in the last
-            if idx < num_layers - 1:
-                out = th.nn.functional.leaky_relu(out, 0.01, inplace=True)
-            else:
-                out = F.tanh(out)
-        out = rearrange(out,'b h w c-> b c h w')
-        return out
-
-class ASAPfunctaHRStreamfulres_noint(th.nn.Module):
-    """Addaptive pixel-wise MLPs"""
-    def __init__(self, num_inputs=13, num_outputs=3, width=64, depth=5, coordinates="cosine"):
-        super(ASAPfunctaHRStreamfulres_noint, self).__init__()
-
-        self.pe_factor = 6
-        self.num_inputs = num_inputs
-        self.num_outputs = num_outputs
-        self.width = width
-        self.depth = depth
-        self.coordinates = coordinates
-        self.xy_coords = None
-        self.channels = []
-        self._set_channels()
-        self.num_params = 0
-        self.biases = []
-        print(self.channels)
-        self._set_num_params()
-        self.net = nn.ModuleList()
-        for i in range(len(self.channels) - 1):
-            #layer_name = 'fc'+str(i)
-            self.net.append(nn.Linear(self.channels[i], self.channels[i+1], bias=True))
-
-    @property  # for backward compatibility
-    def ds(self):
-        return self.downsampling
-
-
-    def _set_channels(self):
-        """Compute and store the hr-stream layer dimensions."""
-        #in_ch = self.num_inputs
-        in_ch = 0
-        if self.coordinates == "cosine":
-            in_ch += 4*(self.pe_factor+1)
-        self.channels = [in_ch]
-
-        for _ in range(self.depth - 1):  # intermediate layer -> cste size
-            self.channels.append(self.width)
-        # output layer
-        self.channels.append(self.num_outputs)
-    
-    def _set_num_params(self):
-        nparams = 0
-        # go over input/output channels for each layer
-        idx = 0
-        for layer, nci in enumerate(self.channels[:-1]):
-            nco = self.channels[layer + 1] 
-            nparams += nco  # FC biases
-            self.biases.append((idx, idx + nco))
-            idx += nco
-
-        self.num_params = nparams
-
-    def _get_bias_indices(self, idx):
-        return self.biases[idx]
-
-    def forward(self, highres, lr_params):
-        assert lr_params.shape[1] == self.num_params, "incorrect input params"
-        bs, _, h, w = highres.shape
-        bs, _, h_lr, w_lr = lr_params.shape
-        # positional encoding
-        if not(self.coordinates is None):
-            if self.xy_coords is None:
-                self.xy_coords = _get_coords_global(bs, h, w, highres.device, self.pe_factor)
-            ##for ablation study
-            #highres = th.cat([highres, self.xy_coords], 1)
-            highres = self.xy_coords
-        
-        # Split input in tiles of size kxk according to the NN interp factor (the total downsampling factor),
-        # with channels last (for matmul)
-        # all pixels within a tile of kxk are processed by the same MLPs parameters
-        nci = highres.shape[1]
-        out = rearrange(highres,'b c h w -> b h w c')
-        num_layers = len(self.channels) - 1
-        for idx, nci in enumerate(self.channels[:-1]):
-            nco = self.channels[idx + 1]
-            # Select params in lowres buffer
-            bstart, bstop = self._get_bias_indices(idx)
-            b_ = lr_params[:, bstart:bstop]
-            out = self.net[idx](out)
-            b_ = b_.permute(0, 2, 3, 1)
-            out = out + b_
-            # Apply RelU non-linearity in all but the last layer, and tanh in the last
-            if idx < num_layers - 1:
-                out = th.nn.functional.leaky_relu(out, 0.01, inplace=True)
-            else:
-                out = F.tanh(out)
-        out = rearrange(out,'b h w c-> b c h w')
-        return out
-
-class decoderfullres(th.nn.Module):
-    """Addaptive pixel-wise MLPs"""
-    def __init__(self, num_inputs=13, num_outputs=3, width=64, depth=5, coordinates="cosine"):
-        super(decoderfullres, self).__init__()
-
-        self.pe_factor = 6
-        self.num_inputs = num_inputs
-        self.num_outputs = num_outputs
-        self.width = width
-        self.depth = depth
-        self.coordinates = coordinates
-        self.xy_coords = None
-        self.channels = []
-        self._set_channels()
-        self.num_params = 0
-        #self.biases = []
-        print(self.channels)
-        self._set_num_params()
-        #self.net = nn.ModuleList()
-        #for i in range(len(self.channels) - 1):
-        #    self.net.append(nn.Linear(self.channels[i], self.channels[i+1], bias=True))
-
-    @property  # for backward compatibility
-    def ds(self):
-        return self.downsampling
-
-    def _set_channels(self):
-        """Compute and store the hr-stream layer dimensions."""
-        in_ch = 0
-        if self.coordinates == "cosine":
-            in_ch += 4*(self.pe_factor+1)
-        self.channels = [in_ch]
-
-        for _ in range(self.depth - 1):  # intermediate layer -> cste size
-            self.channels.append(self.width)
-        # output layer
-        self.channels.append(self.num_outputs)
-    
-    def _set_num_params(self):
-        nparams = 0
-        self.splits = {
-            "biases": [],
-            "weights": [],
-        }
-
-        # go over input/output channels for each layer
-        idx = 0
-        for layer, nci in enumerate(self.channels[:-1]):
-            nco = self.channels[layer + 1] 
-            nparams += nco  # FC biases
-            self.splits["biases"].append((idx, idx + nco))
-            idx += nco
-            
-            nparams += nci * nco  # FC weights
-            self.splits["weights"].append((idx, idx + nco * nci))
-            idx += nco * nci
-        self.num_params = nparams
-
-    def _get_bias_indices(self, idx):
-        return self.splits["biases"][idx]
-        #return self.biases[idx]
-    def _get_weight_indices(self, idx):
-        return self.splits["weights"][idx]
-    def forward(self, highres, lr_params):
-        assert lr_params.shape[1] == self.num_params, "incorrect input params"
-        bs, _, h, w = highres.shape
-        bs, _, h_lr, w_lr = lr_params.shape
-        # positional encoding
-        if not(self.coordinates is None):
-            if self.xy_coords is None:
-                self.xy_coords = _get_coords_global(bs, h, w, highres.device, self.pe_factor)
-            ##for ablation study
-            #highres = th.cat([highres, self.xy_coords], 1)
-            #highres = self.xy_coords
-        
-        # Split input in tiles of size kxk according to the NN interp factor (the total downsampling factor),
-        # with channels last (for matmul)
-        # all pixels within a tile of kxk are processed by the same MLPs parameters
-        #nci = highres.shape[1]
-        nci = self.xy_coords.shape[1]
-        #out = rearrange(highres,'b c h w -> b h w c')
-        out = rearrange(self.xy_coords,'b c h w -> b h w c')
-        num_layers = len(self.channels) - 1
-        out = torch.unsqueeze(out,dim=3)
-        for idx, nci in enumerate(self.channels[:-1]):
-            nco = self.channels[idx + 1]
-            # Select params in lowres buffer
-            bstart, bstop = self._get_bias_indices(idx)
-            wstart, wstop = self._get_weight_indices(idx)
-            w_ = lr_params[:, wstart:wstop]
-            b_ = lr_params[:, bstart:bstop]
-            #out = self.net[idx](out)
-            w_ = w_.permute(0, 2, 3, 1).view(bs, h_lr, w_lr, nci, nco)
-            b_ = b_.permute(0, 2, 3, 1).view(bs, h_lr, w_lr, 1, nco)
-            out = th.matmul(out, w_) + b_
-            #out = out + b_
-            # Apply RelU non-linearity in all but the last layer, and tanh in the last
-            if idx < num_layers - 1:
-                out = th.nn.functional.leaky_relu(out, 0.01, inplace=True)
-            else:
-                out = F.tanh(out)
-        out = torch.squeeze(out,dim=3)
-        out = rearrange(out,'b h w c-> b c h w')
-        return out
-
-class decoderfullres_int(th.nn.Module):
-    """Addaptive pixel-wise MLPs"""
-    def __init__(self, num_inputs=13, num_outputs=3, width=64, depth=5, coordinates="cosine"):
-        super(decoderfullres_int, self).__init__()
-
-        self.pe_factor = 6
-        self.num_inputs = num_inputs
-        self.num_outputs = num_outputs
-        self.width = width
-        self.depth = depth
-        self.coordinates = coordinates
-        self.xy_coords = None
-        self.channels = []
-        self._set_channels()
-        self.num_params = 0
-        #self.biases = []
-        print(self.channels)
-        self._set_num_params()
-
-    @property  # for backward compatibility
-    def ds(self):
-        return self.downsampling
-
-    def _set_channels(self):
-        """Compute and store the hr-stream layer dimensions."""
-        in_ch = self.num_inputs
-        if self.coordinates == "cosine":
-            in_ch += 4*(self.pe_factor+1)
-        self.channels = [in_ch]
-
-        for _ in range(self.depth - 1):  # intermediate layer -> cste size
-            self.channels.append(self.width)
-        # output layer
-        self.channels.append(self.num_outputs)
-    
-    def _set_num_params(self):
-        nparams = 0
-        self.splits = {
-            "biases": [],
-            "weights": [],
-        }
-
-        # go over input/output channels for each layer
-        idx = 0
-        for layer, nci in enumerate(self.channels[:-1]):
-            nco = self.channels[layer + 1] 
-            nparams += nco  # FC biases
-            self.splits["biases"].append((idx, idx + nco))
-            idx += nco
-            
-            nparams += nci * nco  # FC weights
-            self.splits["weights"].append((idx, idx + nco * nci))
-            idx += nco * nci
-        self.num_params = nparams
-
-    def _get_bias_indices(self, idx):
-        return self.splits["biases"][idx]
-        #return self.biases[idx]
-    def _get_weight_indices(self, idx):
-        return self.splits["weights"][idx]
-    def forward(self, highres, lr_params):
-        assert lr_params.shape[1] == self.num_params, "incorrect input params"
-        bs, _, h, w = highres.shape
-        bs, _, h_lr, w_lr = lr_params.shape
-        # positional encoding
-        if not(self.coordinates is None):
-            if self.xy_coords is None:
-                self.xy_coords = _get_coords_global(bs, h, w, highres.device, self.pe_factor)
-            ##for ablation study
-            highres = th.cat([highres, self.xy_coords], 1)
-            #highres = self.xy_coords
-        
-        # Split input in tiles of size kxk according to the NN interp factor (the total downsampling factor),
-        # with channels last (for matmul)
-        # all pixels within a tile of kxk are processed by the same MLPs parameters
-        nci = highres.shape[1]
-        #nci = self.xy_coords.shape[1]
-        out = rearrange(highres,'b c h w -> b h w c')
-        #out = rearrange(self.xy_coords,'b c h w -> b h w c')
-        num_layers = len(self.channels) - 1
-        out = torch.unsqueeze(out,dim=3)
-        for idx, nci in enumerate(self.channels[:-1]):
-            nco = self.channels[idx + 1]
-            # Select params in lowres buffer
-            bstart, bstop = self._get_bias_indices(idx)
-            wstart, wstop = self._get_weight_indices(idx)
-            w_ = lr_params[:, wstart:wstop]
-            b_ = lr_params[:, bstart:bstop]
-            #out = self.net[idx](out)
-            w_ = w_.permute(0, 2, 3, 1).view(bs, h_lr, w_lr, nci, nco)
-            b_ = b_.permute(0, 2, 3, 1).view(bs, h_lr, w_lr, 1, nco)
-            out = th.matmul(out, w_) + b_
-            #out = out + b_
-            # Apply RelU non-linearity in all but the last layer, and tanh in the last
-            if idx < num_layers - 1:
-                out = th.nn.functional.leaky_relu(out, 0.01, inplace=True)
-            else:
-                out = F.tanh(out)
-        out = torch.squeeze(out,dim=3)
-        out = rearrange(out,'b h w c-> b c h w')
-        return out
-
-class ASAPfunctaGeneratorV3(BaseNetwork):
-    def __init__(self, opt, img_size=(128,160), hr_stream=None, lr_stream=None, fast=False):
-        super(ASAPfunctaGeneratorV3, self).__init__()
-        if lr_stream is None or hr_stream is None:
-            lr_stream = dict()
-            hr_stream = dict()
+class ConesGenerator(BaseNetwork):
+    def __init__(self, opt, img_size=(128,160)):
+        super(ConesGenerator, self).__init__()
         self.num_inputs = opt.label_nc
         self.gpu_ids = opt.gpu_ids
 
-        self.highres_stream = ASAPfunctaHRStreamfulres(num_inputs=self.num_inputs,
+        self.decoder = ConesDecoder(num_inputs=self.num_inputs,
                                                num_outputs=opt.output_nc, width=opt.hr_width,
-                                               depth=opt.hr_depth, coordinates=opt.hr_coor,**hr_stream)
+                                               depth=opt.hr_depth, coordinates=opt.hr_coor)
 
-        num_params = self.highres_stream.num_params
+        num_params = self.decoder.num_params
         
         self.latlayers = nn.Conv2d(256, num_params, kernel_size=1, stride=1,padding=0)
-        self.lowres_stream = Encoder_fpn4(num_in=self.num_inputs, block=Bottleneck_in, num_blocks=[2,4,23,3])
+        self.encoder = ConesEncoder(num_in=self.num_inputs, block=Bottleneck_in, num_blocks=[2,4,23,3])
         self.init = InitWeights_me(opt.init_type, opt.init_variance)
-        self.lowres_stream.apply(self.init)
+        self.encoder.apply(self.init)
         self.latlayers.apply(self.init)
-        self.highres_stream.apply(self.init)
+        self.decoder.apply(self.init)
     
     def use_gpu(self):
         return len(self.gpu_ids) > 0
     
     def forward(self, input):
-        features = self.lowres_stream(input)
+        features = self.encoder(input)
         features = self.latlayers(features)
-        output = self.highres_stream(input, features)
-        return output, features
-
-class ASAPfunctaGeneratorV3_ds(BaseNetwork):
-    def __init__(self, opt, img_size=(128,160), hr_stream=None, lr_stream=None, fast=False):
-        super(ASAPfunctaGeneratorV3_ds, self).__init__()
-        if lr_stream is None or hr_stream is None:
-            lr_stream = dict()
-            hr_stream = dict()
-        self.num_inputs = opt.label_nc
-        self.gpu_ids = opt.gpu_ids
-
-        self.highres_stream = ASAPfunctaHRStreamfulres_ds(num_inputs=self.num_inputs,
-                                               num_outputs=opt.output_nc, width=opt.hr_width,
-                                               depth=opt.hr_depth, coordinates=opt.hr_coor,**hr_stream)
-
-        num_params = self.highres_stream.num_params
-        
-        self.latlayers = nn.Conv2d(256, num_params, kernel_size=1, stride=1,padding=0)
-        self.lowres_stream = Encoder_fpn4_ds(num_in=self.num_inputs, block=Bottleneck_in, num_blocks=[2,4,23,3])
-        self.init = InitWeights_me(opt.init_type, opt.init_variance)
-        self.lowres_stream.apply(self.init)
-        self.latlayers.apply(self.init)
-        self.highres_stream.apply(self.init)
-    
-    def use_gpu(self):
-        return len(self.gpu_ids) > 0
-    
-    def forward(self, input):
-        features = self.lowres_stream(input)
-        features = self.latlayers(features)
-        output = self.highres_stream(input, features)
-        return output, features
-
-
-class ASAPfunctaGeneratorV3_noint(BaseNetwork):
-    def __init__(self, opt, img_size=(128,160), hr_stream=None, lr_stream=None, fast=False):
-        super(ASAPfunctaGeneratorV3_noint, self).__init__()
-        if lr_stream is None or hr_stream is None:
-            lr_stream = dict()
-            hr_stream = dict()
-        self.num_inputs = opt.label_nc
-        self.gpu_ids = opt.gpu_ids
-
-        self.highres_stream = ASAPfunctaHRStreamfulres_noint(num_inputs=self.num_inputs,
-                                               num_outputs=opt.output_nc, width=opt.hr_width,
-                                               depth=opt.hr_depth, coordinates=opt.hr_coor,**hr_stream)
-
-        num_params = self.highres_stream.num_params
-        
-        self.latlayers = nn.Conv2d(256, num_params, kernel_size=1, stride=1,padding=0)
-        self.lowres_stream = Encoder_fpn4(num_in=self.num_inputs, block=Bottleneck_in, num_blocks=[2,4,23,3])
-        self.init = InitWeights_me(opt.init_type, opt.init_variance)
-        self.lowres_stream.apply(self.init)
-        self.latlayers.apply(self.init)
-        self.highres_stream.apply(self.init)
-    
-    def use_gpu(self):
-        return len(self.gpu_ids) > 0
-    
-    def forward(self, input):
-        features = self.lowres_stream(input)
-        features = self.latlayers(features)
-        output = self.highres_stream(input, features)
-        return output, features
-
-class PPGenerator(BaseNetwork):
-    'without shift modulation/without intensity'
-    def __init__(self, opt, img_size=(128,160), hr_stream=None, lr_stream=None, fast=False):
-        super(PPGenerator, self).__init__()
-        if lr_stream is None or hr_stream is None:
-            lr_stream = dict()
-            hr_stream = dict()
-        self.num_inputs = opt.label_nc
-        self.gpu_ids = opt.gpu_ids
-
-        self.highres_stream = decoderfullres(num_inputs=self.num_inputs,
-                                               num_outputs=opt.output_nc, width=opt.hr_width,
-                                               depth=opt.hr_depth, coordinates=opt.hr_coor,**hr_stream)
-
-        num_params = self.highres_stream.num_params
-        print('num of params', num_params)
-        self.latlayers = nn.Conv2d(256, num_params, kernel_size=1, stride=1,padding=0)
-        self.lowres_stream = Encoder_fpn4(num_in=self.num_inputs, block=Bottleneck_in, num_blocks=[2,4,23,3])
-        self.init = InitWeights_me(opt.init_type, opt.init_variance)
-        self.lowres_stream.apply(self.init)
-        self.latlayers.apply(self.init)
-        self.highres_stream.apply(self.init)
-    
-    def use_gpu(self):
-        return len(self.gpu_ids) > 0
-    
-    def forward(self, input):
-        features = self.lowres_stream(input)
-        features = self.latlayers(features)
-        output = self.highres_stream(input, features)
-        return output, features
-
-class PPGenerator_int(BaseNetwork):
-    'without shift modulation'
-    def __init__(self, opt, img_size=(128,160), hr_stream=None, lr_stream=None, fast=False):
-        super(PPGenerator_int, self).__init__()
-        if lr_stream is None or hr_stream is None:
-            lr_stream = dict()
-            hr_stream = dict()
-        self.num_inputs = opt.label_nc
-        self.gpu_ids = opt.gpu_ids
-
-        self.highres_stream = decoderfullres_int(num_inputs=self.num_inputs,
-                                               num_outputs=opt.output_nc, width=opt.hr_width,
-                                               depth=opt.hr_depth, coordinates=opt.hr_coor,**hr_stream)
-
-        num_params = self.highres_stream.num_params
-        print('num of params', num_params)
-        self.latlayers = nn.Conv2d(256, num_params, kernel_size=1, stride=1,padding=0)
-        self.lowres_stream = Encoder_fpn4(num_in=self.num_inputs, block=Bottleneck_in, num_blocks=[2,4,23,3])
-        self.init = InitWeights_me(opt.init_type, opt.init_variance)
-        self.lowres_stream.apply(self.init)
-        self.latlayers.apply(self.init)
-        self.highres_stream.apply(self.init)
-    
-    def use_gpu(self):
-        return len(self.gpu_ids) > 0
-    
-    def forward(self, input):
-        features = self.lowres_stream(input)
-        features = self.latlayers(features)
-        output = self.highres_stream(input, features)
+        output = self.decoder(input, features)
         return output, features
