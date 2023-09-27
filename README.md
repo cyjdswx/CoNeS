@@ -2,7 +2,7 @@
 The official implementation of paper:"**[CoNeS: Conditional Neural Fields with Shift Modulation for Multi-sequence MRI Translation](https://arxiv.org/abs/2309.03320)**"
 
 # Install requirements
-    '''bash
+    '''
     pip install -r requirements.txt
     '''
 
